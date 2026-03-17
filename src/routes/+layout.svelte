@@ -1,10 +1,83 @@
 <script lang="ts">
 	import './layout.css';
+	import { onMount } from 'svelte';
 	import { getCurrentWindow } from '@tauri-apps/api/window';
-	import { Minus, Square, X } from 'lucide-svelte';
+	import { FileDown, Minus, Moon, Save, Square, Sun, X } from 'lucide-svelte';
 
 	const { children } = $props();
 	const appWindow = getCurrentWindow();
+	let isDarkMode = $state(false);
+	let dragRegionEl: HTMLDivElement | null = null;
+	type ThemePreference = 'system' | 'light' | 'dark';
+	let themePreference: ThemePreference = 'system';
+	let themeMediaQuery: MediaQueryList | null = null;
+
+	function applyTheme(darkMode: boolean) {
+		if (typeof document === 'undefined') return;
+		document.documentElement.dataset.theme = darkMode ? 'dark' : 'light';
+		document.documentElement.classList.toggle('dark', darkMode);
+	}
+
+	function resolveDarkMode(): boolean {
+		if (themePreference === 'dark') return true;
+		if (themePreference === 'light') return false;
+		return themeMediaQuery?.matches ?? false;
+	}
+
+	function applyResolvedTheme() {
+		isDarkMode = resolveDarkMode();
+		applyTheme(isDarkMode);
+	}
+
+	onMount(() => {
+		themeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+		const stored = localStorage.getItem('bolt-search-theme-preference');
+		if (stored === 'dark' || stored === 'light' || stored === 'system') {
+			themePreference = stored;
+		}
+
+		const onSystemThemeChange = () => {
+			if (themePreference === 'system') {
+				applyResolvedTheme();
+			}
+		};
+
+		themeMediaQuery.addEventListener('change', onSystemThemeChange);
+		applyResolvedTheme();
+		void appWindow.setContentProtected(false).catch(() => {
+			// Ignore permission/platform failures; app remains usable.
+		});
+
+		if (dragRegionEl) {
+			dragRegionEl.addEventListener('mousedown', startDrag);
+		}
+
+		return () => {
+			themeMediaQuery?.removeEventListener('change', onSystemThemeChange);
+			themeMediaQuery = null;
+			if (dragRegionEl) {
+				dragRegionEl.removeEventListener('mousedown', startDrag);
+			}
+		};
+	});
+
+	function toggleDarkMode() {
+		themePreference = isDarkMode ? 'light' : 'dark';
+		localStorage.setItem('bolt-search-theme-preference', themePreference);
+		applyResolvedTheme();
+	}
+
+	async function startDrag(event: MouseEvent) {
+		if (event.button !== 0) return;
+		const target = event.target as HTMLElement | null;
+		if (target?.closest('.window-controls')) return;
+
+		try {
+			await appWindow.startDragging();
+		} catch {
+			// Ignore drag errors; data-tauri-drag-region remains as fallback.
+		}
+	}
 
 	async function minimizeWindow() {
 		await appWindow.minimize();
@@ -17,15 +90,53 @@
 	async function closeWindow() {
 		await appWindow.close();
 	}
+
+	function requestSaveFilter() {
+		window.dispatchEvent(new CustomEvent('bolt-save-filter'));
+	}
+
+	function requestLoadFilter() {
+		window.dispatchEvent(new CustomEvent('bolt-load-filter'));
+	}
 </script>
 
 <div class="app-shell">
-	<header class="window-titlebar">
-		<div class="window-drag-region" data-tauri-drag-region>
+	<header class="window-titlebar" data-tauri-drag-region>
+		<div class="window-drag-region" data-tauri-drag-region bind:this={dragRegionEl}>
 			<span class="window-dot" aria-hidden="true"></span>
 			<span class="window-title">Bolt Search</span>
 		</div>
 		<div class="window-controls">
+			<button
+				class="window-control-button topbar-action"
+				type="button"
+				aria-label="Save Filter"
+				onclick={requestSaveFilter}
+				title="Save Filter"
+			>
+				<Save size={13} strokeWidth={2} />
+			</button>
+			<button
+				class="window-control-button topbar-action"
+				type="button"
+				aria-label="Load Filter"
+				onclick={requestLoadFilter}
+				title="Load Filter"
+			>
+				<FileDown size={13} strokeWidth={2} />
+			</button>
+			<button
+				class="window-control-button theme-toggle"
+				type="button"
+				aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+				onclick={toggleDarkMode}
+			>
+				{#if isDarkMode}
+					<Sun size={14} strokeWidth={2} />
+				{:else}
+					<Moon size={14} strokeWidth={2} />
+				{/if}
+			</button>
 			<button class="window-control-button" type="button" aria-label="Minimize" onclick={minimizeWindow}>
 				<Minus size={14} strokeWidth={2} />
 			</button>

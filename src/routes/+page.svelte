@@ -1,7 +1,8 @@
 <script lang="ts">
     import { invoke } from "@tauri-apps/api/core";
-    import { open } from "@tauri-apps/plugin-dialog";
+    import { open, save as saveDialog } from "@tauri-apps/plugin-dialog";
     import { onMount } from "svelte";
+    import { FilterModel, type Filter, type FilterType } from "./filter.svelte";
     import {
         AlertTriangle,
         ChevronDown,
@@ -9,42 +10,13 @@
         File,
         Folder,
         FolderOpen,
+        HardDrive,
         LoaderCircle,
         Plus,
         Search,
+        Trash2,
         X,
     } from "lucide-svelte";
-
-    type FilterType =
-        | "extension"
-        | "name_contains"
-        | "path_contains"
-        | "subfolder"
-        | "size_gt"
-        | "size_lt"
-        | "modified_after"
-        | "modified_before"
-        | "created_after"
-        | "created_before"
-        | "drive"
-        | "hidden"
-        | "readonly"
-        | "file_only"
-        | "folder_only";
-
-    interface Filter {
-        id: number;
-        type: FilterType;
-        value: string;
-        unit?: string;
-    }
-
-    interface FilterMeta {
-        label: string;
-        placeholder?: string;
-        hasValue: boolean;
-        isSize?: boolean;
-    }
 
     type FileEntry = {
         name: string;
@@ -81,27 +53,18 @@
         isOpen: boolean;
     };
 
-    const MAX_RESULTS = 10_000;
-    const SEARCH_THREAD_LIMIT = 6;
-    const FOLDER_BATCH_SIZE = 24;
-
-    const filterMeta: Record<FilterType, FilterMeta> = {
-        extension:       { label: "Extension",         placeholder: ".rs, .toml", hasValue: true },
-        name_contains:   { label: "Name contains",     placeholder: "config",     hasValue: true },
-        path_contains:   { label: "Path contains",     placeholder: "src/",       hasValue: true },
-        subfolder:       { label: "Subfolder",                                     hasValue: true },
-        size_gt:         { label: "Size greater than",                             hasValue: true, isSize: true },
-        size_lt:         { label: "Size less than",                                hasValue: true, isSize: true },
-        modified_after:  { label: "Modified after",                                hasValue: true },
-        modified_before: { label: "Modified before",                               hasValue: true },
-        created_after:   { label: "Created after",                                 hasValue: true },
-        created_before:  { label: "Created before",                                hasValue: true },
-        drive:           { label: "Drive",                                         hasValue: true },
-        hidden:          { label: "Hidden files",                                  hasValue: false },
-        readonly:        { label: "Read only",                                     hasValue: false },
-        file_only:       { label: "Files only",                                    hasValue: false },
-        folder_only:     { label: "Folders only",                                  hasValue: false },
+    type DriveScanRow = {
+        label: string;
+        scanned: number;
+        active: boolean;
     };
+
+    const MAX_RESULTS = 10_000;
+    const SEARCH_THREADS_PER_DRIVE = 2;
+    const SEARCH_CONCURRENT_REQUESTS = 4;
+    const FOLDER_SLICE_SIZE = 8;
+
+    const filterMeta = FilterModel.meta;
 
     let filters = $state<Filter[]>([]);
     let nextId = $state(0);
@@ -111,16 +74,10 @@
     let searchStatus = $state("");
     let availableRoots = $state<string[]>([]);
     let openDirectories = $state<Record<string, boolean>>({});
+    let driveScanCounts = $state<Record<string, number>>({});
+    let driveScanOrder = $state<string[]>([]);
 
-    const query = $derived({
-        filters: filters.map(({ type, value, unit }) => ({
-            type,
-            ...(filterMeta[type].hasValue ? {
-                value,
-                ...(filterMeta[type].isSize ? { unit: unit ?? "B" } : {}),
-            } : {}),
-        })),
-    });
+    const query = $derived(FilterModel.toQuery(filters));
 
     // ── Contradiction analysis ────────────────────────────────────────────────
 
@@ -136,7 +93,7 @@
             return n * (map[unit] ?? 1);
         };
 
-        const stackable: FilterType[] = ["extension", "path_contains"];
+        const stackable: FilterType[] = FilterModel.stackableTypes;
         const seen = new Map<FilterType, number[]>();
         for (const f of filters) {
             if (stackable.includes(f.type)) continue;
@@ -200,19 +157,56 @@
 
     const resultTree = $derived(buildResultTree(results));
     const treeRows = $derived(flattenVisibleRows(resultTree));
-
-    onMount(async () => {
-        try {
-            availableRoots = await invoke<string[]>("list_search_roots");
-        } catch {
-            availableRoots = [];
+    const driveScanTotal = $derived(
+        Object.values(driveScanCounts).reduce((sum, value) => sum + value, 0)
+    );
+    const driveScanRows = $derived.by(() => {
+        const labels = [...driveScanOrder.slice(0, 4)];
+        while (labels.length < 4) {
+            labels.push("");
         }
+
+        return labels.map((label, index): DriveScanRow => {
+            const active = label.length > 0;
+            const scanned = active ? (driveScanCounts[label] ?? 0) : 0;
+
+            return {
+                label: active ? label : `Drive ${index + 1}`,
+                scanned,
+                active,
+            };
+        });
+    });
+
+    onMount(() => {
+        const onSave = () => {
+            void saveFilter();
+        };
+        const onLoad = () => {
+            void loadFilter();
+        };
+
+        window.addEventListener("bolt-save-filter", onSave);
+        window.addEventListener("bolt-load-filter", onLoad);
+
+        void (async () => {
+            try {
+                availableRoots = await invoke<string[]>("list_search_roots");
+            } catch {
+                availableRoots = [];
+            }
+        })();
+
+        return () => {
+            window.removeEventListener("bolt-save-filter", onSave);
+            window.removeEventListener("bolt-load-filter", onLoad);
+        };
     });
 
     // ── Actions ───────────────────────────────────────────────────────────────
 
     function addFilter() {
-        filters.push({ id: nextId++, type: "extension", value: "" });
+        filters.push(FilterModel.create(nextId++));
     }
 
     function removeFilter(id: number) {
@@ -220,36 +214,60 @@
     }
 
     function onFilterTypeChange(filter: Filter) {
-        if (filter.type === "drive") {
-            filter.value = filter.value || "ALL";
-            return;
+        FilterModel.applyTypeDefaults(filter);
+    }
+
+    function parseSubfolderPaths(value: string): string[] {
+        return value
+            .split("\n")
+            .map((v) => v.trim())
+            .filter((v) => v.length > 0);
+    }
+
+    function dedupePaths(paths: string[]): string[] {
+        const seen = new Set<string>();
+        const unique: string[] = [];
+
+        for (const path of paths) {
+            const normalized = path.trim();
+            if (!normalized || seen.has(normalized)) continue;
+            seen.add(normalized);
+            unique.push(normalized);
         }
-        if (filter.type === "subfolder") {
-            filter.value = filter.value || "";
-            return;
-        }
-        if (!filterMeta[filter.type].hasValue) {
-            filter.value = "";
-        }
-        if (filterMeta[filter.type].isSize && !filter.unit) {
-            filter.unit = "B";
-        }
+
+        return unique;
+    }
+
+    function encodeSubfolderPaths(paths: string[]): string {
+        return dedupePaths(paths).join("\n");
+    }
+
+    function subfolderPathsFor(filter: Filter): string[] {
+        return parseSubfolderPaths(filter.value);
+    }
+
+    function removeSubfolderPath(filter: Filter, pathToRemove: string) {
+        const remaining = subfolderPathsFor(filter).filter((p) => p !== pathToRemove);
+        filter.value = encodeSubfolderPaths(remaining);
     }
 
     async function pickSubfolder(filter: Filter) {
         const driveFilter = filters.find(f => f.type === "drive");
         const selectedDrive = (driveFilter?.value ?? "").trim();
-        const defaultPath = filter.value || (selectedDrive && selectedDrive !== "ALL" ? selectedDrive : undefined);
+        const selectedFolders = subfolderPathsFor(filter);
+        const defaultPath = selectedFolders[0] || (selectedDrive && selectedDrive !== "ALL" ? selectedDrive : undefined);
 
         try {
             const selected = await open({
                 directory: true,
-                multiple: false,
+                multiple: true,
                 ...(defaultPath ? { defaultPath } : {}),
             });
 
-            if (typeof selected === "string") {
-                filter.value = selected;
+            if (Array.isArray(selected)) {
+                filter.value = encodeSubfolderPaths([...selectedFolders, ...selected]);
+            } else if (typeof selected === "string") {
+                filter.value = encodeSubfolderPaths([...selectedFolders, selected]);
             }
         } catch (e) {
             console.error("Folder selection failed:", e);
@@ -262,6 +280,35 @@
 
     function displayPath(path: string): string {
         return path.replace(/\//g, "\\");
+    }
+
+    function driveLabelFromPath(path: string): string {
+        const normalized = path.replace(/\//g, "\\");
+        const match = normalized.match(/^[A-Za-z]:/);
+        if (match) {
+            return `${match[0].toUpperCase()}\\`;
+        }
+        return "Other";
+    }
+
+    function initializeDriveScanSlots(rootsToScan: string[]) {
+        const drives = Array.from(new Set(rootsToScan.map(driveLabelFromPath))).slice(0, 4);
+        driveScanOrder = drives;
+        driveScanCounts = Object.fromEntries(drives.map((drive) => [drive, 0]));
+    }
+
+    function incrementDriveScanned(rootPath: string, scannedFolders: number) {
+        if (scannedFolders <= 0) return;
+
+        const drive = driveLabelFromPath(rootPath);
+        if (!driveScanOrder.includes(drive) && driveScanOrder.length < 4) {
+            driveScanOrder = [...driveScanOrder, drive];
+        }
+
+        driveScanCounts = {
+            ...driveScanCounts,
+            [drive]: (driveScanCounts[drive] ?? 0) + scannedFolders,
+        };
     }
 
     function createMutableNode(name: string, path: string, isDir: boolean): MutableTreeNode {
@@ -356,55 +403,133 @@
         results = [...results, ...chunk.slice(0, remaining)];
     }
 
-    async function scanRootProgressively(
-        root: string,
+    type RootScanState = {
+        root: string;
+        queue: string[];
+        seen: Set<string>;
+        scannedFolders: number;
+    };
+
+    async function scanRootsInterleaved(
+        rootsToScan: string[],
         scopedQuery: { filters: Array<{ type: string; value?: string; unit?: string }> },
-        rootIndex: number,
-        rootCount: number,
     ) {
-        searchStatus = `Phase 1/2: ${root} (${rootIndex + 1}/${rootCount})`;
-        const rootBatch = await invoke<FolderBatchResult>("search_folder_batch", {
-            query: scopedQuery,
-            folders: [root],
-            limit: MAX_RESULTS - results.length,
-            threadLimit: SEARCH_THREAD_LIMIT,
+        const states: RootScanState[] = [];
+        const totalThreadUpperBound = Math.max(1, rootsToScan.length * SEARCH_THREADS_PER_DRIVE);
+        const concurrentWorkers = Math.max(1, Math.min(SEARCH_CONCURRENT_REQUESTS, rootsToScan.length));
+        const perRequestThreadLimit = Math.max(
+            1,
+            Math.floor(totalThreadUpperBound / concurrentWorkers)
+        );
+
+        const phase1Workers = concurrentWorkers;
+        let nextRootIndex = 0;
+
+        const phase1Tasks = Array.from({ length: phase1Workers }, async () => {
+            while (results.length < MAX_RESULTS) {
+                const currentIndex = nextRootIndex;
+                nextRootIndex += 1;
+
+                if (currentIndex >= rootsToScan.length) {
+                    return;
+                }
+
+                const root = rootsToScan[currentIndex];
+                const rootsRemaining = rootsToScan.length - currentIndex;
+                const perRootLimit = Math.max(1, Math.ceil((MAX_RESULTS - results.length) / rootsRemaining));
+
+                searchStatus = `Phase 1/2: ${root} (${currentIndex + 1}/${rootsToScan.length})`;
+
+                const rootBatch = await invoke<FolderBatchResult>("search_folder_batch", {
+                    query: scopedQuery,
+                    folders: [root],
+                    limit: perRootLimit,
+                    threadLimit: perRequestThreadLimit,
+                });
+
+                appendResults(rootBatch.entries);
+                incrementDriveScanned(root, rootBatch.scanned_folders);
+
+                const seen = new Set<string>([root]);
+                const queue: string[] = [];
+
+                for (const next of rootBatch.next_folders) {
+                    if (!seen.has(next)) {
+                        seen.add(next);
+                        queue.push(next);
+                    }
+                }
+
+                states.push({
+                    root,
+                    queue,
+                    seen,
+                    scannedFolders: rootBatch.scanned_folders,
+                });
+            }
         });
 
-        appendResults(rootBatch.entries);
+        await Promise.all(phase1Tasks);
 
-        let scannedFolders = rootBatch.scanned_folders;
-        const seenFolders = new Set<string>([root]);
-        const queue: string[] = [];
-
-        for (const next of rootBatch.next_folders) {
-            if (!seenFolders.has(next)) {
-                seenFolders.add(next);
-                queue.push(next);
-            }
+        if (states.length === 0 || results.length >= MAX_RESULTS) {
+            return;
         }
 
-        while (queue.length > 0 && results.length < MAX_RESULTS) {
-            const batchFolders = queue.splice(0, Math.min(FOLDER_BATCH_SIZE, queue.length));
+        let roundRobinIndex = 0;
+        const getNextStateWithWork = (): RootScanState | null => {
+            if (states.length === 0) return null;
 
-            searchStatus = `Phase 2/2: ${root} | scanned ${scannedFolders} folders | queue ${queue.length + batchFolders.length}`;
-
-            const batch = await invoke<FolderBatchResult>("search_folder_batch", {
-                query: scopedQuery,
-                folders: batchFolders,
-                limit: MAX_RESULTS - results.length,
-                threadLimit: SEARCH_THREAD_LIMIT,
-            });
-
-            appendResults(batch.entries);
-            scannedFolders += batch.scanned_folders;
-
-            for (const next of batch.next_folders) {
-                if (!seenFolders.has(next)) {
-                    seenFolders.add(next);
-                    queue.push(next);
+            for (let i = 0; i < states.length; i++) {
+                const idx = (roundRobinIndex + i) % states.length;
+                const state = states[idx];
+                if (state.queue.length > 0) {
+                    roundRobinIndex = (idx + 1) % states.length;
+                    return state;
                 }
             }
-        }
+
+            return null;
+        };
+
+        const phase2Workers = Math.max(1, Math.min(concurrentWorkers, states.length));
+        const phase2Tasks = Array.from({ length: phase2Workers }, async () => {
+            while (results.length < MAX_RESULTS) {
+                const state = getNextStateWithWork();
+                if (!state) {
+                    return;
+                }
+
+                const batchFolders = state.queue.splice(0, Math.min(FOLDER_SLICE_SIZE, state.queue.length));
+                if (batchFolders.length === 0) {
+                    continue;
+                }
+
+                const activeRoots = Math.max(1, states.filter((s) => s.queue.length > 0).length);
+                const perRootLimit = Math.max(1, Math.ceil((MAX_RESULTS - results.length) / activeRoots));
+
+                searchStatus = `Phase 2/2: ${state.root} | scanned ${state.scannedFolders} folders`;
+
+                const batch = await invoke<FolderBatchResult>("search_folder_batch", {
+                    query: scopedQuery,
+                    folders: batchFolders,
+                    limit: perRootLimit,
+                    threadLimit: perRequestThreadLimit,
+                });
+
+                appendResults(batch.entries);
+                state.scannedFolders += batch.scanned_folders;
+                incrementDriveScanned(state.root, batch.scanned_folders);
+
+                for (const next of batch.next_folders) {
+                    if (!state.seen.has(next)) {
+                        state.seen.add(next);
+                        state.queue.push(next);
+                    }
+                }
+            }
+        });
+
+        await Promise.all(phase2Tasks);
     }
 
     async function search() {
@@ -414,6 +539,8 @@
         searchStatus = "Preparing roots...";
         results = [];
         openDirectories = {};
+        driveScanCounts = {};
+        driveScanOrder = [];
         try {
             const roots = availableRoots.length > 0
                 ? availableRoots
@@ -421,11 +548,14 @@
 
             const driveFilter = filters.find(f => f.type === "drive");
             const selectedDrive = (driveFilter?.value ?? "ALL").trim();
-            const subfolderFilter = filters.find(f => f.type === "subfolder");
-            const selectedSubfolder = (subfolderFilter?.value ?? "").trim();
+            const selectedSubfolders = dedupePaths(
+                filters
+                    .filter((f) => f.type === "subfolder")
+                    .flatMap((f) => parseSubfolderPaths(f.value))
+            );
 
-            const rootsToScan = selectedSubfolder
-                ? [selectedSubfolder]
+            const rootsToScan = selectedSubfolders.length > 0
+                ? selectedSubfolders
                 : selectedDrive && selectedDrive !== "ALL"
                 ? roots.filter(r => r === selectedDrive)
                 : roots;
@@ -439,10 +569,9 @@
                 return;
             }
 
-            for (let i = 0; i < rootsToScan.length; i++) {
-                if (results.length >= MAX_RESULTS) break;
-                await scanRootProgressively(rootsToScan[i], scopedQuery, i, rootsToScan.length);
-            }
+            initializeDriveScanSlots(rootsToScan);
+
+            await scanRootsInterleaved(rootsToScan, scopedQuery);
 
             searchStatus = `Done (${results.length} result${results.length === 1 ? "" : "s"})`;
         } catch (e) {
@@ -458,6 +587,64 @@
         await invoke("open_in_explorer", { path });
     }
 
+    function clearSearchResults() {
+        if (searching) return;
+        results = [];
+        searched = false;
+        searchStatus = "";
+        openDirectories = {};
+        driveScanCounts = {};
+        driveScanOrder = [];
+    }
+
+    async function saveFilter() {
+        try {
+            const selectedPath = await saveDialog({
+                title: "Save Filter",
+                defaultPath: "bolt-filter.bsearch",
+                filters: [{ name: "Bolt Search Filter", extensions: ["bsearch"] }],
+            });
+
+            if (typeof selectedPath !== "string" || !selectedPath.trim()) {
+                return;
+            }
+
+            const payload = JSON.stringify(FilterModel.toSavedFile(filters), null, 2);
+            await invoke("save_filter_file", { path: selectedPath, content: payload });
+            searchStatus = `Filter saved: ${selectedPath}`;
+        } catch (e) {
+            console.error("Save filter failed:", e);
+            searchStatus = "Save filter failed";
+        }
+    }
+
+    async function loadFilter() {
+        try {
+            const selectedPath = await open({
+                title: "Load Filter",
+                multiple: false,
+                directory: false,
+                filters: [{ name: "Bolt Search Filter", extensions: ["bsearch"] }],
+            });
+
+            if (typeof selectedPath !== "string" || !selectedPath.trim()) {
+                return;
+            }
+
+            const content = await invoke<string>("load_filter_file", { path: selectedPath });
+            const saved = FilterModel.parseSavedFile(content);
+            const loadedFilters = FilterModel.fromSavedFile(saved, 0);
+
+            filters = loadedFilters;
+            nextId = loadedFilters.length;
+            clearSearchResults();
+            searchStatus = `Filter loaded: ${selectedPath}`;
+        } catch (e) {
+            console.error("Load filter failed:", e);
+            searchStatus = "Load filter failed";
+        }
+    }
+
     function formatSize(bytes: number): string {
         if (bytes === 0) return "0 B";
         if (bytes < 1024) return `${bytes} B`;
@@ -470,7 +657,7 @@
 <div class="w-full h-full flex">
 
     <!-- Sidebar -->
-    <div class="w-75 h-full bg-zinc-100 border-r border-zinc-300 flex flex-col p-4 gap-3">
+    <div class="sidebar-panel w-75 h-full bg-zinc-100 border-r border-zinc-300 flex flex-col p-4 gap-3">
 
         <span class="text-xs font-semibold text-zinc-400 uppercase tracking-widest">Bolt Search</span>
 
@@ -506,32 +693,53 @@
                                 {/each}
                             </select>
                         {:else if filter.type === "subfolder"}
-                            <div class="flex gap-1 w-full">
+                            <div class="flex flex-col gap-1 w-full">
                                 <input
                                     type="text"
                                     class="text-xs px-2 py-1 rounded border border-zinc-200 focus:outline-none focus:ring-1 focus:ring-zinc-400"
-                                    style="width: calc(100% - 62px);"
-                                    placeholder="Choose any folder path"
-                                    bind:value={filter.value}
+                                    value={subfolderPathsFor(filter).join(" | ") || "No folder selected"}
+                                    placeholder="Select folder(s)"
+                                    disabled
                                 />
-                                <button
-                                    type="button"
-                                    class="h-7 w-7 rounded border border-zinc-200 bg-white hover:bg-zinc-50 inline-flex items-center justify-center text-zinc-500"
-                                    onclick={() => pickSubfolder(filter)}
-                                    aria-label="Browse for folder"
-                                    title="Browse"
-                                >
-                                    <FolderOpen size={13} strokeWidth={2} />
-                                </button>
-                                <button
-                                    type="button"
-                                    class="h-7 w-7 rounded border border-zinc-200 bg-white hover:bg-zinc-50 inline-flex items-center justify-center text-zinc-500"
-                                    onclick={() => { filter.value = ""; }}
-                                    aria-label="Clear folder path"
-                                    title="Clear"
-                                >
-                                    <X size={12} strokeWidth={2} />
-                                </button>
+                                <div class="flex gap-1">
+                                    <button
+                                        type="button"
+                                        class="h-7 flex-1 rounded border border-zinc-200 bg-white hover:bg-zinc-50 inline-flex items-center justify-center gap-1 text-zinc-600 text-xs"
+                                        onclick={() => pickSubfolder(filter)}
+                                        aria-label="Browse for folders"
+                                        title="Browse"
+                                    >
+                                        <FolderOpen size={13} strokeWidth={2} />
+                                        Browse
+                                    </button>
+                                    <button
+                                        type="button"
+                                        class="h-7 w-7 rounded border border-zinc-200 bg-white hover:bg-zinc-50 inline-flex items-center justify-center text-zinc-500"
+                                        onclick={() => { filter.value = ""; }}
+                                        aria-label="Clear selected folders"
+                                        title="Clear"
+                                    >
+                                        <X size={12} strokeWidth={2} />
+                                    </button>
+                                </div>
+
+                                {#if subfolderPathsFor(filter).length > 0}
+                                    <div class="max-h-24 overflow-auto border border-zinc-200 rounded-md bg-zinc-50">
+                                        {#each subfolderPathsFor(filter) as folderPath}
+                                            <div class="px-2 py-1 text-[11px] text-zinc-600 border-b border-zinc-200 last:border-b-0 flex items-start justify-between gap-2">
+                                                <span class="break-all leading-snug">{displayPath(folderPath)}</span>
+                                                <button
+                                                    type="button"
+                                                    class="text-zinc-400 hover:text-red-500 shrink-0"
+                                                    onclick={() => removeSubfolderPath(filter, folderPath)}
+                                                    aria-label="Remove selected folder"
+                                                >
+                                                    <X size={11} strokeWidth={2} />
+                                                </button>
+                                            </div>
+                                        {/each}
+                                    </div>
+                                {/if}
                             </div>
                         {:else if filter.type.includes("modified") || filter.type.includes("created")}
                             <input
@@ -610,22 +818,51 @@
             {/if}
         </button>
 
+        <button
+            class="w-full py-2 text-sm rounded-md border border-zinc-300 bg-white hover:bg-zinc-50 text-zinc-600 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            onclick={clearSearchResults}
+            disabled={searching || (!searched && results.length === 0)}
+        >
+            <Trash2 size={14} strokeWidth={2} />
+            Clear Results
+        </button>
+
     </div>
 
     <!-- Main panel -->
     <div class="h-full flex flex-col" style="width: calc(100% - 300px)">
 
         <!-- Header -->
-        <div class="px-6 py-3 border-b border-zinc-200 flex items-center justify-between">
+        <div class="border-b border-zinc-200 px-4 py-2 flex flex-col gap-1.5">
             <span class="text-xs text-zinc-400">
                 {#if searching}
                     {searchStatus || "Searching..."}
                 {:else if searched}
                     {results.length} result{results.length === 1 ? "" : "s"}
                 {:else}
-                    Add filters and search
+                    Search Status Bar - Empty
                 {/if}
             </span>
+
+            {#if searching || searched}
+                <span class="text-xs text-zinc-500">
+                    Total scanned: {driveScanTotal} folder{driveScanTotal === 1 ? "" : "s"}
+                </span>
+
+                <div class="flex w-full overflow-hidden rounded-md border border-zinc-300 bg-zinc-100">
+                    {#each driveScanRows as row, i}
+                        <div class="h-8 flex-1 min-w-0 flex items-center justify-between px-3 text-[11px] {row.active ? 'bg-zinc-50' : 'bg-zinc-100'} {i < driveScanRows.length - 1 ? 'border-r border-zinc-300' : ''}">
+                            <div class="flex items-center gap-1 min-w-0">
+                                <HardDrive size={12} class="text-zinc-500 shrink-0" strokeWidth={2} />
+                                <span class="text-zinc-600 font-medium truncate">{row.label}</span>
+                            </div>
+                            <span class="text-zinc-500 whitespace-nowrap">
+                                {row.active ? `${row.scanned} folders` : "-"}
+                            </span>
+                        </div>
+                    {/each}
+                </div>
+            {/if}
         </div>
 
         <!-- Tree -->
@@ -690,22 +927,32 @@
         appearance: none;
         -webkit-appearance: none;
         -moz-appearance: none;
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='3' viewBox='0 0 6 3'%3E%3Cpath d='M0 0l3 3 3-3z' fill='%2371717a'/%3E%3C/svg%3E");
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%2371717a'/%3E%3C/svg%3E");
         background-repeat: no-repeat;
         background-position: right 8px center;
-        background-size: 12px 5px;
-        background-color: white;
-        border: 1px solid rgb(228 228 231);
+        background-size: 10px 6px;
+        background-color: var(--control-bg);
+        border: 1px solid var(--control-border);
         border-radius: 0.375rem;
         padding: 4px 24px 4px 8px;
         font-size: 0.75rem;
-        color: rgb(82 82 91);
+        color: var(--control-text);
         cursor: pointer;
         width: 100%;
     }
 
     select:focus {
         outline: none;
-        border-color: rgb(161 161 170);
+        border-color: var(--focus-ring);
+        box-shadow: 0 0 0 1px var(--focus-ring);
+    }
+
+    :global(html[data-theme='dark']) select {
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%23d4d4d8'/%3E%3C/svg%3E");
+    }
+
+    :global(html[data-theme='dark']) select option {
+        background: #252526;
+        color: #d4d4d4;
     }
 </style>

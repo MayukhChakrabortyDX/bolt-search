@@ -3,12 +3,15 @@ use std::fs::{self, Metadata};
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
 use serde::{Deserialize, Serialize};
 use rayon::prelude::*;
 use walkdir::WalkDir;
 use chrono::NaiveDate;
+
+static THREAD_POOL_CACHE: OnceLock<Mutex<Vec<(usize, Arc<rayon::ThreadPool>)>>> = OnceLock::new();
 
 // ── Input types ───────────────────────────────────────────────────────────────
 
@@ -100,11 +103,51 @@ fn get_drives() -> Vec<PathBuf> {
         .collect()
 }
 
+fn get_thread_pool(workers: usize) -> Result<Arc<rayon::ThreadPool>, String> {
+    let cache = THREAD_POOL_CACHE.get_or_init(|| Mutex::new(Vec::new()));
+    let mut guard = cache.lock().map_err(|_| "Thread pool cache lock poisoned".to_string())?;
+
+    if let Some((_, pool)) = guard.iter().find(|(w, _)| *w == workers) {
+        return Ok(pool.clone());
+    }
+
+    let pool = Arc::new(
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .map_err(|e| e.to_string())?,
+    );
+
+    guard.push((workers, pool.clone()));
+    Ok(pool)
+}
+
+fn try_claim_result_slot(remaining: &AtomicUsize) -> bool {
+    let mut current = remaining.load(Ordering::Acquire);
+
+    loop {
+        if current == 0 {
+            return false;
+        }
+
+        match remaining.compare_exchange_weak(
+            current,
+            current - 1,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return true,
+            Err(next) => current = next,
+        }
+    }
+}
+
 fn roots_from_drive_filters(filters: &[Filter]) -> Vec<PathBuf> {
     let selected_subfolders: Vec<PathBuf> = filters
         .iter()
         .filter(|f| f.kind == "subfolder")
         .filter_map(|f| f.value.as_deref())
+        .flat_map(|v| v.lines())
         .map(|v| v.trim())
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
@@ -463,10 +506,7 @@ fn search_folder_batch_impl(
         });
     }
 
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(workers)
-        .build()
-        .map_err(|e| e.to_string())?;
+    let pool = get_thread_pool(workers)?;
 
     let scans: Vec<FolderScanResult> = pool.install(|| {
         cleaned_folders
@@ -502,29 +542,55 @@ fn search_folder_batch_impl(
 }
 
 fn search_impl(query: SearchQuery, roots: Vec<PathBuf>, max_results: usize) -> Vec<FileEntry> {
-    let filters = prepare_filters(&query.filters);
+    if roots.is_empty() || max_results == 0 {
+        return Vec::new();
+    }
 
-    let mut results = Vec::with_capacity(2048);
+    let filters = Arc::new(prepare_filters(&query.filters));
+    let remaining = Arc::new(AtomicUsize::new(max_results));
 
-    'outer: for root in roots {
-        for entry in WalkDir::new(root)
-            .follow_links(false)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            let path = entry.path();
-            let metadata = match entry.metadata() {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
+    let per_root: Vec<Vec<FileEntry>> = roots
+        .into_par_iter()
+        .map(|root| {
+            let mut root_results = Vec::new();
 
-            if !entry_matches(path, &metadata, &filters) {
-                continue;
+            for entry in WalkDir::new(root)
+                .follow_links(false)
+                .into_iter()
+                .filter_map(|e| e.ok())
+            {
+                if remaining.load(Ordering::Acquire) == 0 {
+                    break;
+                }
+
+                let path = entry.path();
+                let metadata = match entry.metadata() {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+
+                if !entry_matches(path, &metadata, filters.as_ref()) {
+                    continue;
+                }
+
+                if !try_claim_result_slot(remaining.as_ref()) {
+                    break;
+                }
+
+                root_results.push(to_file_entry(path, &metadata));
             }
 
-            results.push(to_file_entry(path, &metadata));
+            root_results
+        })
+        .collect();
 
-            if results.len() >= max_results { break 'outer; }
+    let mut results = Vec::with_capacity(max_results.min(2048));
+    for mut chunk in per_root {
+        for entry in chunk.drain(..) {
+            results.push(entry);
+            if results.len() >= max_results {
+                return results;
+            }
         }
     }
 
@@ -562,6 +628,37 @@ fn open_in_explorer(path: String) -> Result<(), String> {
     }
 }
 
+#[tauri::command]
+fn save_filter_file(path: String, content: String) -> Result<(), String> {
+    let trimmed = path.trim().trim_matches('"');
+    if trimmed.is_empty() {
+        return Err("Path is empty".to_string());
+    }
+
+    let target = PathBuf::from(trimmed);
+    if let Some(parent) = target.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create filter directory: {}", e))?;
+        }
+    }
+
+    fs::write(&target, content)
+        .map_err(|e| format!("Failed to save filter file: {}", e))
+}
+
+#[tauri::command]
+fn load_filter_file(path: String) -> Result<String, String> {
+    let trimmed = path.trim().trim_matches('"');
+    if trimmed.is_empty() {
+        return Err("Path is empty".to_string());
+    }
+
+    let target = PathBuf::from(trimmed);
+    fs::read_to_string(&target)
+        .map_err(|e| format!("Failed to load filter file: {}", e))
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -574,7 +671,9 @@ pub fn run() {
         list_subfolders,
         search_in_root,
         search_folder_batch,
-        open_in_explorer
+        open_in_explorer,
+        save_filter_file,
+        load_filter_file
     ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
