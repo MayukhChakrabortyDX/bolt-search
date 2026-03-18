@@ -1,273 +1,232 @@
-# Bolt Search
+# Bolt Search User Manual
 
 <p align="center">
-	<img alt="Bolt Search banner" src="https://capsule-render.vercel.app/api?type=waving&height=240&color=0:0f172a,100:0891b2&text=Bolt%20Search&fontColor=ffffff&fontSize=54&fontAlignY=38&desc=Fast%20progressive%20Windows%20file%20discovery%20with%20filter%20pipelines&descAlignY=58&descSize=16" />
+	<img alt="Bolt Search stylized screenshot" src="./static/hero.png" />
 </p>
 
-<p align="center">
-	<a href="https://tauri.app/"><img alt="Tauri" src="https://img.shields.io/badge/Tauri-2.x-24C8D8?logo=tauri&logoColor=white" /></a>
-	<a href="https://svelte.dev/"><img alt="Svelte" src="https://img.shields.io/badge/Svelte-5-FF3E00?logo=svelte&logoColor=white" /></a>
-	<a href="https://www.rust-lang.org/"><img alt="Rust" src="https://img.shields.io/badge/Rust-2021-000000?logo=rust&logoColor=white" /></a>
-	<img alt="License" src="https://img.shields.io/badge/License-MIT-green.svg" />
-</p>
-
-Bolt Search is a Windows desktop file discovery app built with Tauri 2, Svelte 5, and Rust.
-It provides fast progressive scanning, filter pipelines, a tree-based results view, and native desktop behaviors.
+Bolt Search is a Windows desktop app for finding files and folders quickly using filter pipelines.
+This manual explains how to use the app day-to-day.
 
 ## Table of Contents
 
-- [Why Bolt Search](#why-bolt-search)
-- [Highlights](#highlights)
-- [Architecture](#architecture)
-- [Tech Stack](#tech-stack)
-- [Getting Started](#getting-started)
-- [Scripts](#scripts)
-- [How to Use](#how-to-use)
-- [Filter Reference](#filter-reference)
-- [Saved Filter Files (.bsearch)](#saved-filter-files-bsearch)
-- [Tauri Command Contract](#tauri-command-contract)
-- [Project Structure](#project-structure)
-- [Performance and Safety Notes](#performance-and-safety-notes)
-- [Troubleshooting](#troubleshooting)
-- [Roadmap](#roadmap)
-- [Contributing](#contributing)
-- [License](#license)
+- [1) What Bolt Search Does](#1-what-bolt-search-does)
+- [2) Install and Launch](#2-install-and-launch)
+- [3) Interface Tour](#3-interface-tour)
+- [4) Quick Start Workflow](#4-quick-start-workflow)
+- [5) Filter Guide](#5-filter-guide)
+- [6) Search Modes](#6-search-modes)
+- [7) Save and Load Filter Profiles](#7-save-and-load-filter-profiles)
+- [8) Result Tree Actions](#8-result-tree-actions)
+- [9) Best Practices for Large Drives](#9-best-practices-for-large-drives)
+- [10) Troubleshooting](#10-troubleshooting)
 
-## Why Bolt Search
+## 1) What Bolt Search Does
 
-- Progressive UX: users get early results while deeper scanning continues.
-- Powerful filtering: combine metadata, path, date, size, and visibility filters.
-- Windows-first desktop behavior: frameless custom title bar, Explorer integration, and drive-aware scanning.
-- Practical scaling: bounded thread pools and batched folder traversal reduce UI stalls.
+Bolt Search helps you:
 
-## Highlights
+- Search across all Windows drives or a specific drive.
+- Narrow results using name, path, extension, size, and date filters.
+- Scope searches to one or more picked folders.
+- See results in a hierarchical tree (folder/file structure).
+- Open file locations directly in Windows Explorer.
+- Save and reuse filter presets with `.bsearch` files.
 
-- Drive scope filter (`ALL` or specific drive root).
-- Subfolder scope filter via native folder picker.
-- Two-phase progressive scan:
-	- Phase 1 scans roots immediately.
-	- Phase 2 scans queued subfolders in slices.
-- IntelliJ-style tree results with expand/collapse and full path display.
-- Top bar actions for Save/Load filter profiles.
-- Filter profile persistence using custom `.bsearch` files.
-- Safe Explorer reveal logic for paths containing special characters.
+## 2) Install and Launch
 
-## Architecture
+If you are running from source:
 
-<p align="center">
-	<img alt="Bolt Search architecture banner" src="https://capsule-render.vercel.app/api?type=waving&height=170&section=header&color=0:1e293b,100:0ea5e9&text=Architecture&fontColor=ffffff&fontSize=34&fontAlignY=40&desc=Tauri%20shell%20+%20Svelte%20UI%20+%20Rust%20search%20engine&descAlignY=66&descSize=14" />
-</p>
-
-```mermaid
-flowchart LR
-		A[User: Filter Pipeline] --> B[Svelte UI: src/routes/+page.svelte]
-		B --> C[Tauri invoke commands]
-		C --> D[Rust Engine: src-tauri/src/lib.rs]
-		D --> E[Drive and folder traversal]
-		E --> F[Filtered FileEntry results]
-		F --> B
-		B --> G[Tree View + Explorer reveal]
-```
-
-## Tech Stack
-
-- Desktop shell: Tauri 2
-- Frontend: Svelte 5 + TypeScript + Vite + Tailwind CSS
-- Backend engine: Rust 2021
-- Rust crates: `walkdir`, `rayon`, `chrono`, `serde`
-- Icons: `lucide-svelte`
-- Native dialogs: `@tauri-apps/plugin-dialog`, `tauri-plugin-dialog`
-
-## Getting Started
-
-### Prerequisites
-
-- Windows 10 or newer
-- Bun (recommended package/runtime tool used by this repo)
-- Rust toolchain (`stable`)
-- Tauri prerequisites for Windows (WebView2 and MSVC build tools)
-
-### Install
+1. Install dependencies:
 
 ```bash
 bun install
 ```
 
-### Run in development
+2. Start the desktop app in development mode:
 
 ```bash
 bun run tauri dev
 ```
 
-### Build production assets
-
-```bash
-bun run build
-```
-
-### Build desktop app bundle
+3. Build a production desktop bundle:
 
 ```bash
 bun run tauri build
 ```
 
-## Scripts
+## 3) Interface Tour
 
-| Script | Description |
-|---|---|
-| `bun run dev` | Start Vite dev server |
-| `bun run build` | Build web frontend |
-| `bun run preview` | Preview built frontend |
-| `bun run check` | Type and Svelte checks |
-| `bun run check:watch` | Continuous checks |
-| `bun run tauri dev` | Run desktop app in dev mode |
-| `bun run tauri build` | Build distributable desktop bundle |
+### Top Bar
 
-## How to Use
+- Save icon: save current filter setup.
+- Load icon: load a saved `.bsearch` filter profile.
+- Stream toggle: switch between Streaming and Batch behavior.
+- Theme toggle: switch between light and dark theme.
+- Window controls: minimize, maximize, close.
 
-1. Add one or more filters from the left sidebar.
-2. Choose drive scope (`ALL` or one drive) or select one or more subfolders.
-3. Click Search to begin progressive scanning.
-4. Expand directories in the right tree panel.
-5. Click a file row to reveal it in Windows Explorer.
-6. Use top bar Save/Load actions to persist filter profiles.
+### Left Sidebar (Filter Panel)
 
-## Filter Reference
+- Top action row:
+	- Add: add a new filter tile.
+	- Search: start search (or Stop while running).
+	- Clear: clear current results.
+- Filter tiles:
+	- Each tile has a filter type dropdown.
+	- Tile color indicates filter type category.
+	- Remove button deletes that filter.
 
-| Filter Type | Needs Value | Notes |
+### Right Panel (Results)
+
+- Status area shows running state, scanned folders, and result count.
+- Results are displayed as a collapsible tree.
+- Click a file row to reveal it in Windows Explorer.
+
+## 4) Quick Start Workflow
+
+1. Click Add.
+2. Choose a filter type (for example `name_contains` or `extension`).
+3. Add a drive or subfolder scope if needed.
+4. Click Search.
+5. Expand folders in the result tree.
+6. Click a file to open its location in Explorer.
+
+## 5) Filter Guide
+
+All filters are AND-combined. A result must pass every active filter.
+
+### Scope and Path Filters
+
+| Filter | Value | Purpose | Example |
+|---|---|---|---|
+| `drive` | Yes | Search one drive or all drives | `ALL`, `C:\` |
+| `subfolder` | Yes | Search inside selected folder(s) | Pick folder via Browse |
+| `path_contains` | Yes | Path substring match (stackable) | `projects`, `src/` |
+| `path_prefix` | Yes | Path starts with prefix | `C:/Users/Ana/Documents` |
+
+### Name and Extension Filters
+
+| Filter | Value | Purpose | Example |
+|---|---|---|---|
+| `name_contains` | Yes | Match part of file/folder name | `report` |
+| `extension` | Yes | File extension match (stackable) | `.pdf,.docx` |
+
+### Size Filters
+
+| Filter | Value | Purpose | Example |
+|---|---|---|---|
+| `size_gt` | Yes + unit | File/folder size must be greater than value | `10 MB` |
+| `size_lt` | Yes + unit | File/folder size must be less than value | `200 MB` |
+
+### Date Filters
+
+| Filter | Value | Purpose | Example |
+|---|---|---|---|
+| `modified_after` | Yes (`YYYY-MM-DD`) | Modified later than date | `2026-01-01` |
+| `modified_before` | Yes (`YYYY-MM-DD`) | Modified earlier than date | `2026-03-01` |
+| `modified_range` | Yes (start + end) | Modified between two dates | `2026-01-01` to `2026-01-31` |
+| `created_after` | Yes (`YYYY-MM-DD`) | Created later than date | `2026-01-01` |
+| `created_before` | Yes (`YYYY-MM-DD`) | Created earlier than date | `2026-03-01` |
+| `created_range` | Yes (start + end) | Created between two dates | `2026-01-01` to `2026-01-31` |
+
+### Attribute Filters
+
+| Filter | Value | Purpose |
 |---|---|---|
-| `extension` | Yes | Comma-separated, normalized to `.ext` |
-| `name_contains` | Yes | Case-insensitive substring match |
-| `path_contains` | Yes | Stackable, case-insensitive path substring |
-| `subfolder` | Yes | Uses native folder picker; overrides drive scope |
-| `size_gt` | Yes | Size threshold with unit (`B`, `KB`, `MB`, `GB`) |
-| `size_lt` | Yes | Size upper bound |
-| `modified_after` | Yes | `YYYY-MM-DD` |
-| `modified_before` | Yes | `YYYY-MM-DD` |
-| `created_after` | Yes | `YYYY-MM-DD` |
-| `created_before` | Yes | `YYYY-MM-DD` |
-| `drive` | Yes | `ALL` or specific root like `C:\` |
-| `hidden` | No | Windows hidden attribute required |
-| `readonly` | No | Read-only file permission required |
+| `hidden` | No | Only hidden items |
+| `readonly` | No | Only read-only items |
 | `file_only` | No | Exclude directories |
 | `folder_only` | No | Exclude files |
 
-Filter contradiction checks currently block impossible combinations, including:
+### Contradictions (Search Is Blocked)
 
-- repeated non-stackable filters,
-- `size_gt >= size_lt`,
-- `modified_after >= modified_before`,
-- `created_after >= created_before`,
-- both `file_only` and `folder_only` together.
+Bolt Search blocks impossible filter combinations, including:
 
-## Saved Filter Files (.bsearch)
+- Duplicate non-stackable filters.
+- `size_gt >= size_lt`.
+- `modified_after >= modified_before`.
+- `created_after >= created_before`.
+- `modified_range` start date greater than end date.
+- `created_range` start date greater than end date.
+- `file_only` and `folder_only` both active.
 
-Bolt Search supports filter profile persistence through custom `.bsearch` files.
+## 6) Search Modes
 
-- Save dialog default file name: `bolt-filter.bsearch`
-- Load dialog filter: `*.bsearch`
-- File content: versioned JSON payload
+### Streaming Mode
 
-Example payload:
+- Shows results progressively while scanning continues.
+- Best when you want first results quickly.
+
+### Batch Mode
+
+- Prioritizes a complete pass and then shows full batch results.
+- Useful when you want stable final sets rather than live updates.
+
+Switch modes using the Stream toggle in the top bar.
+
+## 7) Save and Load Filter Profiles
+
+Use Save and Load in the top bar.
+
+- File extension: `.bsearch`
+- Recommended default name: `bolt-filter.bsearch`
+
+Example profile payload:
 
 ```json
 {
 	"version": 1,
 	"filters": [
 		{ "type": "extension", "value": ".rs,.toml" },
+		{ "type": "modified_range", "value": "2026-01-01", "value2": "2026-01-31" },
 		{ "type": "drive", "value": "C:\\" },
 		{ "type": "size_gt", "value": "10", "unit": "MB" }
 	]
 }
 ```
 
-## Tauri Command Contract
+## 8) Result Tree Actions
 
-| Command | Purpose | Return |
-|---|---|---|
-| `search(query)` | Full recursive search entry point | `Result<Vec<FileEntry>, String>` |
-| `list_search_roots()` | Enumerate available drive roots | `Vec<String>` |
-| `list_subfolders(root)` | List first-level subfolders under root | `Result<Vec<String>, String>` |
-| `search_in_root(query, root, limit)` | Legacy progressive root scan helper | `Result<Vec<FileEntry>, String>` |
-| `search_folder_batch(query, folders, limit, thread_limit)` | Non-recursive parallel batch scan | `Result<FolderBatchResult, String>` |
-| `open_in_explorer(path)` | Open/reveal path in Windows Explorer | `Result<(), String>` |
-| `save_filter_file(path, content)` | Write `.bsearch` file to disk | `Result<(), String>` |
-| `load_filter_file(path)` | Read filter file from disk | `Result<String, String>` |
+- Expand/collapse folders using row controls.
+- Click a file row to reveal it in Windows Explorer.
+- Paths are displayed to help you quickly verify location context.
 
-## Project Structure
+## 9) Best Practices for Large Drives
 
-```text
-bolt-search/
-|- src/
-|  |- routes/
-|     |- +layout.svelte        # custom title bar + topbar actions
-|     |- +page.svelte          # filters, search orchestration, tree UI
-|     |- filter.svelte.ts      # filter model and serialization
-|- src-tauri/
-|  |- src/
-|     |- main.rs               # thin entry point
-|     |- lib.rs                # search/filter engine + command handlers
-|  |- capabilities/
-|     |- default.json          # window/api permissions
-|  |- tauri.conf.json          # window and build configuration
-```
+- Use `drive` or `subfolder` first to reduce search scope.
+- Add `path_prefix` when you know the base directory.
+- Combine with `name_contains` and `extension` for fast narrowing.
+- Use date ranges instead of broad after/before windows.
+- Keep only necessary filters to avoid over-constraining and missed matches.
 
-## Performance and Safety Notes
+## 10) Troubleshooting
 
-- Two-phase search reduces time-to-first-result.
-- Batch traversal uses bounded concurrency with configurable thread limits.
-- Thread pool instances are cached by worker count to reduce setup overhead.
-- Size parsing uses overflow-safe multiplication (`checked_mul`).
-- Date comparisons run on signed Unix timestamps (`i64`).
-- Command-level panic guards are used on key search commands.
-- Explorer path handling canonicalizes and passes args safely to avoid misrouting.
+### No Results
 
-## Troubleshooting
-
-### App exits early in dev mode
-
-If `bun run tauri dev` exits unexpectedly before UI interaction:
-
-1. Ensure Windows build tools and WebView2 runtime are installed.
-2. Run `bun run build` to confirm frontend output integrity.
-3. Re-run with logs enabled:
-
-```bash
-bun run tauri dev -- --verbose
-```
-
-4. Inspect backend startup path in `src-tauri/src/main.rs` and `src-tauri/src/lib.rs`.
-
-### No search results
-
-- Verify selected drive or subfolder exists and is accessible.
+- Remove one restrictive filter at a time.
 - Check contradiction warnings in the filter panel.
-- Remove restrictive filters like `hidden`, `readonly`, and narrow date/size ranges.
+- Verify selected drive or folder exists and is accessible.
 
-## Roadmap
+### Search Feels Slow
 
-- Add packaged release notes and auto-update flow.
-- Add optional indexing/cache mode for very large file systems.
-- Add richer export options for result sets.
-- Add automated integration tests for command contracts.
+- Narrow to one drive or specific subfolder.
+- Add `path_prefix` and extension/name filters early.
+- Try Streaming mode for quicker time-to-first-result.
 
-## Contributing
+### App Does Not Launch in Dev Mode
 
-Contributions are welcome.
-
-1. Fork the repo.
-2. Create a feature branch.
-3. Keep changes focused and documented.
-4. Run checks before opening a PR:
+1. Verify Tauri prerequisites (WebView2 + MSVC build tools).
+2. Rebuild frontend assets:
 
 ```bash
-bun run check
 bun run build
 ```
 
-5. Open a pull request with clear rationale and screenshots/logs when relevant.
+3. Restart app:
+
+```bash
+bun run tauri dev
+```
 
 ## License
 
-MIT License. See project metadata in `package.json`.
+MIT License.
 

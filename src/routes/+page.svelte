@@ -3,6 +3,9 @@
     import { open, save as saveDialog } from "@tauri-apps/plugin-dialog";
     import { fade } from "svelte/transition";
     import { onMount } from "svelte";
+    import ChipSelect, {
+        type ChipSelectOption,
+    } from "../lib/components/ChipSelect.svelte";
     import { FilterModel, type Filter, type FilterType } from "./filter.svelte";
     import {
         AlertTriangle,
@@ -79,7 +82,12 @@
           };
 
     type ScopedQuery = {
-        filters: Array<{ type: string; value?: string; unit?: string }>;
+        filters: Array<{
+            type: string;
+            value?: string;
+            value2?: string;
+            unit?: string;
+        }>;
     };
 
     type SearchRunMode = "streaming" | "batch" | null;
@@ -113,6 +121,12 @@
 
     const MAX_RESULTS = 10_000;
     const WORKER_UI_DEBOUNCE_MS = 50;
+    const SIZE_UNIT_OPTIONS: ChipSelectOption[] = [
+        { value: "B", label: "B" },
+        { value: "KB", label: "KB" },
+        { value: "MB", label: "MB" },
+        { value: "GB", label: "GB" },
+    ];
 
     const filterMeta = FilterModel.meta;
 
@@ -137,6 +151,14 @@
     const driveCountAnimationCancels = new Map<string, () => void>();
 
     const query = $derived(FilterModel.toQuery(filters));
+    const filterTypeOptions = $derived(
+        (Object.entries(filterMeta) as [FilterType, (typeof filterMeta)[FilterType]][])
+            .map(([value, meta]) => ({ value, label: meta.label })),
+    );
+    const driveOptions = $derived([
+        { value: "ALL", label: "Global (all drives)" },
+        ...availableRoots.map((root) => ({ value: root, label: root })),
+    ]);
 
     // ── Contradiction analysis ────────────────────────────────────────────────
 
@@ -146,6 +168,15 @@
         const contradictions: Contradiction[] = [];
         const get = (type: FilterType) =>
             filters.filter((f) => f.type === type);
+        const parseDate = (value: string): Date | null => {
+            const trimmed = value.trim();
+            if (!trimmed) {
+                return null;
+            }
+
+            const parsed = new Date(trimmed);
+            return isNaN(parsed.getTime()) ? null : parsed;
+        };
         const toBytes = (value: string, unit: string = "B"): number => {
             const n = parseFloat(value);
             if (isNaN(n)) return -1;
@@ -195,9 +226,9 @@
             const after = get(afterType);
             const before = get(beforeType);
             if (after.length && before.length) {
-                const a = new Date(after[0].value);
-                const b = new Date(before[0].value);
-                if (!isNaN(a.getTime()) && !isNaN(b.getTime()) && a >= b) {
+                const a = parseDate(after[0].value);
+                const b = parseDate(before[0].value);
+                if (a && b && a >= b) {
                     contradictions.push({
                         message: `"${label} after" must be earlier than "${label} before"`,
                         filters: [after[0].id, before[0].id],
@@ -206,8 +237,26 @@
             }
         };
 
+        const checkRange = (rangeType: FilterType, label: string) => {
+            const range = get(rangeType);
+            if (!range.length) {
+                return;
+            }
+
+            const start = parseDate(range[0].value);
+            const end = parseDate(range[0].value2);
+            if (start && end && start > end) {
+                contradictions.push({
+                    message: `"${label}" start date must be earlier than or equal to end date`,
+                    filters: [range[0].id],
+                });
+            }
+        };
+
         check("modified_after", "modified_before", "Modified");
         check("created_after", "created_before", "Created");
+        checkRange("modified_range", "Range Modified");
+        checkRange("created_range", "Range Created");
 
         const fileOnly = get("file_only");
         const folderOnly = get("folder_only");
@@ -353,6 +402,10 @@
 
     function onFilterTypeChange(filter: Filter) {
         FilterModel.applyTypeDefaults(filter);
+    }
+
+    function filterTileClass(type: FilterType): string {
+        return `filter-tile filter-${type.replaceAll("_", "-")}`;
     }
 
     function parseSubfolderPaths(value: string): string[] {
@@ -1086,6 +1139,47 @@
             >Filter Panel</span
         >
 
+        <div class="grid grid-cols-3 gap-2">
+            <button
+                class="py-2 text-[11px] rounded-md border border-zinc-300 bg-white hover:bg-zinc-50 text-zinc-600 flex items-center justify-center gap-1"
+                onclick={addFilter}
+            >
+                <Plus size={13} strokeWidth={2} />
+                Add
+            </button>
+
+            <button
+                class="py-2 text-[11px] rounded-md font-medium transition-colors text-white flex items-center justify-center gap-1
+                    {searching
+                    ? 'bg-red-600 hover:bg-red-700'
+                    : hasContradiction
+                      ? 'bg-red-500 hover:bg-red-600'
+                      : 'bg-zinc-800 hover:bg-zinc-700'}"
+                onclick={searching ? stopSearch : search}
+                disabled={!searching && hasContradiction}
+            >
+                {#if searching}
+                    <X size={13} strokeWidth={2} />
+                    Stop
+                {:else if hasContradiction}
+                    <AlertTriangle size={13} strokeWidth={2} />
+                    Blocked
+                {:else}
+                    <Search size={13} strokeWidth={2} />
+                    Search
+                {/if}
+            </button>
+
+            <button
+                class="py-2 text-[11px] rounded-md border border-zinc-300 bg-white hover:bg-zinc-50 text-zinc-600 flex items-center justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                onclick={clearSearchResults}
+                disabled={searching || (!searched && results.length === 0)}
+            >
+                <Trash2 size={13} strokeWidth={2} />
+                Clear
+            </button>
+        </div>
+
         <!-- Filter tokens -->
         <div class="flex flex-col gap-2 flex-1 overflow-y-auto">
             {#if filters.length === 0}
@@ -1095,20 +1189,14 @@
             {/if}
 
             {#each filters as filter (filter.id)}
-                <div
-                    class="flex flex-col gap-1 bg-white border border-zinc-200 rounded-md p-2"
-                >
-                    <div class="flex items-center justify-between mb-1">
-                        <select
-                            bind:value={filter.type}
-                            onchange={() => onFilterTypeChange(filter)}
-                        >
-                            {#each Object.entries(filterMeta) as [val, meta]}
-                                <option value={val}>{meta.label}</option>
-                            {/each}
-                        </select>
+                <div class={filterTileClass(filter.type)}>
+                    <div class="filter-tile-head">
+                        <span class="filter-chip">
+                            <span class="filter-chip-dot"></span>
+                            {filterMeta[filter.type].label}
+                        </span>
                         <button
-                            class="ml-2 p-1 text-zinc-300 hover:text-red-500"
+                            class="filter-remove-btn"
                             onclick={() => removeFilter(filter.id)}
                             aria-label="Remove filter"
                         >
@@ -1116,19 +1204,29 @@
                         </button>
                     </div>
 
+                    <div class="filter-type-row">
+                        <ChipSelect
+                            containerClass="chip-filter-select filter-type-select"
+                            ariaLabel="Filter type"
+                            bind:value={filter.type}
+                            options={filterTypeOptions}
+                            onChange={() => onFilterTypeChange(filter)}
+                        />
+                    </div>
+
                     {#if filterMeta[filter.type].hasValue}
                         {#if filter.type === "drive"}
-                            <select bind:value={filter.value}>
-                                <option value="ALL">Global (all drives)</option>
-                                {#each availableRoots as root}
-                                    <option value={root}>{root}</option>
-                                {/each}
-                            </select>
+                            <ChipSelect
+                                containerClass="chip-filter-select"
+                                ariaLabel="Drive scope"
+                                bind:value={filter.value}
+                                options={driveOptions}
+                            />
                         {:else if filter.type === "subfolder"}
                             <div class="flex flex-col gap-1 w-full">
                                 <input
                                     type="text"
-                                    class="text-xs px-2 py-1 rounded border border-zinc-200 focus:outline-none focus:ring-1 focus:ring-zinc-400"
+                                    class="filter-field"
                                     value={subfolderPathsFor(filter).join(
                                         " | ",
                                     ) || "No folder selected"}
@@ -1138,7 +1236,7 @@
                                 <div class="flex gap-1">
                                     <button
                                         type="button"
-                                        class="h-7 flex-1 rounded border border-zinc-200 bg-white hover:bg-zinc-50 inline-flex items-center justify-center gap-1 text-zinc-600 text-xs"
+                                        class="filter-action-btn h-7 flex-1"
                                         onclick={() => pickSubfolder(filter)}
                                         aria-label="Browse for folders"
                                         title="Browse"
@@ -1148,7 +1246,7 @@
                                     </button>
                                     <button
                                         type="button"
-                                        class="h-7 w-7 rounded border border-zinc-200 bg-white hover:bg-zinc-50 inline-flex items-center justify-center text-zinc-500"
+                                        class="filter-action-btn h-7 w-7 text-zinc-500"
                                         onclick={() => {
                                             filter.value = "";
                                         }}
@@ -1193,10 +1291,25 @@
                                     </div>
                                 {/if}
                             </div>
+                        {:else if filter.type.endsWith("_range")}
+                            <div class="flex gap-1 w-full">
+                                <input
+                                    type="date"
+                                    class="filter-field"
+                                    bind:value={filter.value}
+                                    title="Start date"
+                                />
+                                <input
+                                    type="date"
+                                    class="filter-field"
+                                    bind:value={filter.value2}
+                                    title="End date"
+                                />
+                            </div>
                         {:else if filter.type.includes("modified") || filter.type.includes("created")}
                             <input
                                 type="date"
-                                class="text-xs px-2 py-1 rounded border border-zinc-200 focus:outline-none focus:ring-1 focus:ring-zinc-400"
+                                class="filter-field"
                                 bind:value={filter.value}
                             />
                         {:else if filterMeta[filter.type].isSize}
@@ -1204,29 +1317,22 @@
                                 <input
                                     type="number"
                                     min="0"
-                                    class="text-xs px-2 py-1 rounded border border-zinc-200 focus:outline-none focus:ring-1 focus:ring-zinc-400"
+                                    class="filter-field"
                                     style="width: calc(100% - 52px);"
                                     placeholder="0"
                                     bind:value={filter.value}
                                 />
-                                <select
-                                    style="width: 48px; shrink: 0; padding-right: 4px; background-image: none;"
-                                    onchange={(e) => {
-                                        filter.unit = (
-                                            e.target as HTMLSelectElement
-                                        ).value;
-                                    }}
-                                >
-                                    <option value="B">B</option>
-                                    <option value="KB">KB</option>
-                                    <option value="MB">MB</option>
-                                    <option value="GB">GB</option>
-                                </select>
+                                <ChipSelect
+                                    containerClass="chip-filter-select filter-unit-select"
+                                    ariaLabel="Size unit"
+                                    bind:value={filter.unit}
+                                    options={SIZE_UNIT_OPTIONS}
+                                />
                             </div>
                         {:else}
                             <input
                                 type="text"
-                                class="text-xs px-2 py-1 rounded border border-zinc-200 focus:outline-none focus:ring-1 focus:ring-zinc-400"
+                                class="filter-field"
                                 placeholder={filterMeta[filter.type]
                                     .placeholder ?? "value..."}
                                 bind:value={filter.value}
@@ -1246,45 +1352,6 @@
             </div>
         {/if}
 
-        <!-- Buttons -->
-        <button
-            class="w-full py-2 text-sm rounded-md border border-zinc-300 bg-white hover:bg-zinc-50 text-zinc-600 flex items-center justify-center gap-2"
-            onclick={addFilter}
-        >
-            <Plus size={14} strokeWidth={2} />
-            Add Filter
-        </button>
-
-        <button
-            class="w-full py-2 text-sm rounded-md font-medium transition-colors text-white flex items-center justify-center gap-2
-                {searching
-                ? 'bg-red-600 hover:bg-red-700'
-                : hasContradiction
-                  ? 'bg-red-500 hover:bg-red-600'
-                  : 'bg-zinc-800 hover:bg-zinc-700'}"
-            onclick={searching ? stopSearch : search}
-            disabled={!searching && hasContradiction}
-        >
-            {#if searching}
-                <X size={14} strokeWidth={2} />
-                Stop Search
-            {:else if hasContradiction}
-                <AlertTriangle size={14} strokeWidth={2} />
-                Contradiction
-            {:else}
-                <Search size={14} strokeWidth={2} />
-                Search
-            {/if}
-        </button>
-
-        <button
-            class="w-full py-2 text-sm rounded-md border border-zinc-300 bg-white hover:bg-zinc-50 text-zinc-600 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-            onclick={clearSearchResults}
-            disabled={searching || (!searched && results.length === 0)}
-        >
-            <Trash2 size={14} strokeWidth={2} />
-            Clear Results
-        </button>
     </div>
 
     <!-- Main panel -->
@@ -1466,36 +1533,169 @@
 </div>
 
 <style>
-    select {
-        appearance: none;
-        -webkit-appearance: none;
-        -moz-appearance: none;
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%2371717a'/%3E%3C/svg%3E");
-        background-repeat: no-repeat;
-        background-position: right 8px center;
-        background-size: 10px 6px;
-        background-color: var(--control-bg);
-        border: 1px solid var(--control-border);
-        border-radius: 0.375rem;
-        padding: 4px 24px 4px 8px;
-        font-size: 0.75rem;
-        color: var(--control-text);
-        cursor: pointer;
+    .filter-tile {
+        --filter-h: 220;
+        --filter-s: 72%;
+        --filter-l: 44%;
+        --filter-accent: hsl(var(--filter-h) var(--filter-s) var(--filter-l));
+        --filter-control-height: 30px;
+        display: flex;
+        flex-direction: column;
+        gap: 0.45rem;
+        padding: 0.65rem;
+        border-radius: 0.75rem;
+        border: 1px solid
+            color-mix(in srgb, var(--filter-accent) 45%, var(--control-border));
+        background:
+            linear-gradient(
+                160deg,
+                color-mix(in srgb, var(--filter-accent) 9%, var(--panel) 91%) 0%,
+                var(--panel) 62%
+            ),
+            var(--panel);
+    }
+
+    :global(html[data-theme="dark"]) .filter-tile {
+        --filter-l: 64%;
+        border-color: color-mix(in srgb, var(--filter-accent) 40%, #3c3c3c);
+        background:
+            linear-gradient(
+                160deg,
+                color-mix(in srgb, var(--filter-accent) 16%, #1f1f1f) 0%,
+                #1f1f1f 64%
+            ),
+            #1f1f1f;
+    }
+
+    .filter-tile-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+    }
+
+    .filter-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        font-size: 0.67rem;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: color-mix(in srgb, var(--filter-accent) 62%, var(--control-text));
+        background: color-mix(in srgb, var(--filter-accent) 12%, transparent);
+        border: 1px solid color-mix(in srgb, var(--filter-accent) 34%, transparent);
+        padding: 0.16rem 0.45rem;
+        border-radius: 999px;
+        white-space: nowrap;
+    }
+
+    .filter-chip-dot {
+        width: 0.42rem;
+        height: 0.42rem;
+        border-radius: 999px;
+        background: var(--filter-accent);
+    }
+
+    .filter-type-row {
         width: 100%;
     }
 
-    select:focus {
+    .filter-type-select {
+        width: 100%;
+    }
+
+    .chip-filter-select {
+        width: 100%;
+    }
+
+    .filter-unit-select {
+        width: 48px;
+        flex-shrink: 0;
+    }
+
+    .filter-remove-btn {
+        width: 1.5rem;
+        height: 1.5rem;
+        border-radius: 0.45rem;
+        border: 1px solid color-mix(in srgb, var(--filter-accent) 28%, var(--control-border));
+        background: color-mix(in srgb, var(--panel) 90%, transparent);
+        color: color-mix(in srgb, var(--filter-accent) 45%, var(--control-muted));
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        transition:
+            background-color 0.15s ease,
+            color 0.15s ease,
+            border-color 0.15s ease;
+    }
+
+    .filter-remove-btn:hover {
+        color: #ef4444;
+        border-color: color-mix(in srgb, #ef4444 45%, var(--control-border));
+        background: color-mix(in srgb, #ef4444 14%, transparent);
+    }
+
+    .filter-field {
+        width: 100%;
+        height: var(--filter-control-height);
+        min-height: var(--filter-control-height);
+        font-size: 0.75rem;
+        padding: 0 0.55rem;
+        border-radius: 0.45rem;
+        border: 1px solid
+            color-mix(in srgb, var(--filter-accent) 18%, var(--control-border));
+        background: color-mix(in srgb, var(--panel) 86%, transparent);
+        color: var(--control-text);
+        transition:
+            border-color 0.15s ease,
+            background-color 0.15s ease;
+    }
+
+    .filter-field:focus {
         outline: none;
-        border-color: var(--focus-ring);
-        box-shadow: 0 0 0 1px var(--focus-ring);
+        border-color: color-mix(in srgb, var(--filter-accent) 50%, var(--focus-ring));
     }
 
-    :global(html[data-theme="dark"]) select {
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%23d4d4d8'/%3E%3C/svg%3E");
+    .filter-action-btn {
+        border-radius: 0.45rem;
+        border: 1px solid
+            color-mix(in srgb, var(--filter-accent) 20%, var(--control-border));
+        background: color-mix(in srgb, var(--panel) 90%, transparent);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.25rem;
+        font-size: 0.72rem;
+        color: var(--control-text);
+        transition:
+            background-color 0.15s ease,
+            border-color 0.15s ease,
+            color 0.15s ease;
     }
 
-    :global(html[data-theme="dark"]) select option {
-        background: #252526;
-        color: #d4d4d4;
+    .filter-action-btn:hover {
+        background: color-mix(in srgb, var(--filter-accent) 14%, var(--control-bg-hover));
+        border-color: color-mix(in srgb, var(--filter-accent) 35%, var(--control-border));
     }
+
+    .filter-extension { --filter-h: 220; }
+    .filter-name-contains { --filter-h: 174; }
+    .filter-path-contains { --filter-h: 196; }
+    .filter-path-prefix { --filter-h: 204; }
+    .filter-subfolder { --filter-h: 34; }
+    .filter-size-gt { --filter-h: 145; }
+    .filter-size-lt { --filter-h: 124; }
+    .filter-modified-after { --filter-h: 286; }
+    .filter-modified-before { --filter-h: 264; }
+    .filter-modified-range { --filter-h: 300; }
+    .filter-created-after { --filter-h: 340; }
+    .filter-created-before { --filter-h: 358; }
+    .filter-created-range { --filter-h: 15; }
+    .filter-drive { --filter-h: 48; }
+    .filter-hidden { --filter-h: 210; --filter-s: 22%; }
+    .filter-readonly { --filter-h: 200; --filter-s: 28%; }
+    .filter-file-only { --filter-h: 152; }
+    .filter-folder-only { --filter-h: 26; }
+
 </style>

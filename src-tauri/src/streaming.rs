@@ -1,6 +1,6 @@
 use std::collections::{HashSet, VecDeque};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -93,16 +93,18 @@ pub fn cancel_search(run_id: Option<u64>) -> Result<(), String> {
 #[derive(Debug)]
 struct FolderScanState {
     path: PathBuf,
-    next_index: usize,
+    reader: Option<fs::ReadDir>,
     buffered_subfolders: Vec<String>,
+    started: bool,
 }
 
 impl FolderScanState {
     fn new(path: PathBuf) -> Self {
         Self {
             path,
-            next_index: 0,
+            reader: None,
             buffered_subfolders: Vec::new(),
+            started: false,
         }
     }
 }
@@ -111,7 +113,6 @@ impl FolderScanState {
 struct FolderChunkResult {
     entries: Vec<FileEntry>,
     discovered_subfolders: Vec<String>,
-    processed_items: usize,
     exhausted: bool,
 }
 
@@ -266,20 +267,19 @@ fn run_walkdir_search(
             continue;
         }
 
-        pending_started_folders.extend(
-            round_states
-                .iter()
-                .filter(|state| state.next_index == 0)
-                .map(|state| state.path.to_string_lossy().to_string()),
-        );
+        for state in &mut round_states {
+            if !state.started {
+                pending_started_folders.push(state.path.to_string_lossy().to_string());
+                state.started = true;
+            }
+        }
 
-        let chunk_results: Vec<FolderChunkResult> = pool.install(|| {
+        let chunk_results: Vec<(FolderScanState, FolderChunkResult)> = pool.install(|| {
             round_states
-                .par_iter()
+                .into_par_iter()
                 .map(|state| {
                     scan_folder_chunk(
-                        &state.path,
-                        state.next_index,
+                        state,
                         FOLDER_CONTEXT_SWITCH_ITEMS,
                         filters.as_ref(),
                         run_id,
@@ -293,9 +293,8 @@ fn run_walkdir_search(
             break;
         }
 
-        for (mut state, mut chunk) in round_states.into_iter().zip(chunk_results.into_iter()) {
+        for (mut state, mut chunk) in chunk_results.into_iter() {
             state.buffered_subfolders.append(&mut chunk.discovered_subfolders);
-            state.next_index += chunk.processed_items;
 
             if total_results < cap && !chunk.entries.is_empty() {
                 let remaining = cap.saturating_sub(total_results);
@@ -370,76 +369,80 @@ fn run_walkdir_search(
 }
 
 fn scan_folder_chunk(
-    folder: &Path,
-    start_index: usize,
+    mut state: FolderScanState,
     chunk_size: usize,
     filters: &PreparedFilters,
     run_id: u64,
-) -> FolderChunkResult {
+) -> (FolderScanState, FolderChunkResult) {
     let mut entries = Vec::new();
     let mut discovered_subfolders = Vec::new();
+    let mut exhausted = false;
 
-    let read_dir = match fs::read_dir(folder) {
-        Ok(iter) => iter,
-        Err(_) => {
-            return FolderChunkResult {
-                entries,
-                discovered_subfolders,
-                processed_items: 0,
-                exhausted: true,
-            };
-        }
-    };
+    if state.reader.is_none() {
+        state.reader = match fs::read_dir(&state.path) {
+            Ok(iter) => Some(iter),
+            Err(_) => {
+                exhausted = true;
+                None
+            }
+        };
+    }
 
-    let mut iter = read_dir.skip(start_index).peekable();
     let mut processed_items = 0usize;
 
-    while processed_items < chunk_size {
-        if is_run_cancelled(run_id) {
-            break;
-        }
+    if let Some(reader) = state.reader.as_mut() {
+        while processed_items < chunk_size {
+            if is_run_cancelled(run_id) {
+                break;
+            }
 
-        let Some(next_item) = iter.next() else {
-            break;
-        };
+            let Some(next_item) = reader.next() else {
+                exhausted = true;
+                break;
+            };
 
-        processed_items += 1;
+            processed_items += 1;
 
-        let dir_entry = match next_item {
-            Ok(entry) => entry,
-            Err(_) => continue,
-        };
+            let dir_entry = match next_item {
+                Ok(entry) => entry,
+                Err(_) => continue,
+            };
 
-        let file_type = match dir_entry.file_type() {
-            Ok(ft) => ft,
-            Err(_) => continue,
-        };
+            let file_type = match dir_entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
 
-        if file_type.is_symlink() {
-            continue;
-        }
+            if file_type.is_symlink() {
+                continue;
+            }
 
-        let path = dir_entry.path();
-        let metadata = match dir_entry.metadata() {
-            Ok(meta) => meta,
-            Err(_) => continue,
-        };
+            let path = dir_entry.path();
+            let metadata = match dir_entry.metadata() {
+                Ok(meta) => meta,
+                Err(_) => continue,
+            };
 
-        if file_type.is_dir() {
-            discovered_subfolders.push(path.to_string_lossy().to_string());
-        }
+            if file_type.is_dir() {
+                discovered_subfolders.push(path.to_string_lossy().to_string());
+            }
 
-        if entry_matches(&path, &metadata, filters) {
-            entries.push(to_file_entry(&path, &metadata));
+            if entry_matches(&path, &metadata, filters) {
+                entries.push(to_file_entry(&path, &metadata));
+            }
         }
     }
 
-    let exhausted = iter.peek().is_none();
-
-    FolderChunkResult {
-        entries,
-        discovered_subfolders,
-        processed_items,
-        exhausted,
+    if exhausted {
+        state.reader = None;
     }
+
+    (
+        state,
+        FolderChunkResult {
+            entries,
+            discovered_subfolders,
+            exhausted,
+        },
+    )
 }

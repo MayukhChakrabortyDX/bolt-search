@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
 use serde::{Deserialize, Serialize};
+use rayon::iter::ParallelBridge;
 use rayon::prelude::*;
 use walkdir::WalkDir;
 use chrono::NaiveDate;
@@ -27,6 +28,7 @@ struct Filter {
     #[serde(rename = "type")]
     kind: String,
     value: Option<String>,
+    value2: Option<String>,
     unit: Option<String>,
 }
 
@@ -54,11 +56,26 @@ struct FolderScanResult {
     next_folders: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum FilterStage {
+    EntryKind,
+    Extension,
+    PathPrefix,
+    NameContains,
+    PathContains,
+    Hidden,
+    Readonly,
+    SizeRange,
+    ModifiedRange,
+    CreatedRange,
+}
+
 #[derive(Debug)]
 struct PreparedFilters {
     extensions: HashSet<String>,
     name_contains: Vec<String>,
     path_contains: Vec<String>,
+    path_prefix: Option<String>,
     size_gt: Option<u64>,
     size_lt: Option<u64>,
     modified_after: Option<i64>,
@@ -69,6 +86,7 @@ struct PreparedFilters {
     folder_only: bool,
     hidden: bool,
     readonly: bool,
+    stage_order: Vec<FilterStage>,
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -89,6 +107,71 @@ fn parse_date(value: &str) -> Option<i64> {
         .ok()
         .and_then(|d| d.and_hms_opt(0, 0, 0))
         .map(|dt| dt.and_utc().timestamp())
+}
+
+fn parse_date_end_exclusive(value: &str) -> Option<i64> {
+    NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d")
+        .ok()
+        .and_then(|d| d.succ_opt().or(Some(d)))
+        .and_then(|d| d.and_hms_opt(0, 0, 0))
+        .map(|dt| dt.and_utc().timestamp())
+}
+
+fn merge_lower_bound(a: Option<i64>, b: Option<i64>) -> Option<i64> {
+    match (a, b) {
+        (Some(left), Some(right)) => Some(left.max(right)),
+        (Some(left), None) => Some(left),
+        (None, Some(right)) => Some(right),
+        (None, None) => None,
+    }
+}
+
+fn merge_upper_bound(a: Option<i64>, b: Option<i64>) -> Option<i64> {
+    match (a, b) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(left), None) => Some(left),
+        (None, Some(right)) => Some(right),
+        (None, None) => None,
+    }
+}
+
+fn normalize_path_text(input: &str) -> String {
+    let mut normalized = input.trim().replace('\\', "/").to_ascii_lowercase();
+    while normalized.ends_with('/') && normalized.len() > 1 {
+        normalized.pop();
+    }
+    normalized
+}
+
+fn normalize_path_for_match(path: &Path) -> String {
+    normalize_path_text(&path.to_string_lossy())
+}
+
+fn path_starts_with_component(path: &str, prefix: &str) -> bool {
+    if prefix.is_empty() {
+        return true;
+    }
+    if path == prefix {
+        return true;
+    }
+
+    path
+        .strip_prefix(prefix)
+        .map(|rest| rest.starts_with('/'))
+        .unwrap_or(false)
+}
+
+fn can_descend_into_dir(path: &Path, filters: &PreparedFilters) -> bool {
+    let Some(prefix) = filters.path_prefix.as_deref() else {
+        return true;
+    };
+
+    let dir_path = normalize_path_for_match(path);
+
+    // Continue descending when this folder is inside the prefix OR
+    // this folder is still an ancestor on the way to the prefix.
+    path_starts_with_component(&dir_path, prefix)
+        || path_starts_with_component(prefix, &dir_path)
 }
 
 fn system_time_to_unix_secs(time: SystemTime) -> Option<i64> {
@@ -124,21 +207,23 @@ fn get_thread_pool(workers: usize) -> Result<Arc<rayon::ThreadPool>, String> {
     Ok(pool)
 }
 
-fn try_claim_result_slot(remaining: &AtomicUsize) -> bool {
+fn claim_result_budget(remaining: &AtomicUsize, max_budget: usize) -> usize {
     let mut current = remaining.load(Ordering::Acquire);
 
     loop {
         if current == 0 {
-            return false;
+            return 0;
         }
+
+        let grant = current.min(max_budget.max(1));
 
         match remaining.compare_exchange_weak(
             current,
-            current - 1,
+            current - grant,
             Ordering::AcqRel,
             Ordering::Acquire,
         ) {
-            Ok(_) => return true,
+            Ok(_) => return grant,
             Err(next) => current = next,
         }
     }
@@ -179,6 +264,46 @@ fn roots_from_drive_filters(filters: &[Filter]) -> Vec<PathBuf> {
         .collect()
 }
 
+fn build_filter_stage_order(filters: &PreparedFilters) -> Vec<FilterStage> {
+    // Run high-pruning checks before expensive timestamp checks so each rejection
+    // reduces the amount of work done by later stages.
+    let mut stages: Vec<(u8, FilterStage)> = Vec::new();
+
+    if filters.file_only || filters.folder_only {
+        stages.push((100, FilterStage::EntryKind));
+    }
+    if !filters.extensions.is_empty() {
+        stages.push((95, FilterStage::Extension));
+    }
+    if filters.path_prefix.is_some() {
+        stages.push((90, FilterStage::PathPrefix));
+    }
+    if !filters.name_contains.is_empty() {
+        stages.push((85, FilterStage::NameContains));
+    }
+    if !filters.path_contains.is_empty() {
+        stages.push((80, FilterStage::PathContains));
+    }
+    if filters.hidden {
+        stages.push((70, FilterStage::Hidden));
+    }
+    if filters.readonly {
+        stages.push((68, FilterStage::Readonly));
+    }
+    if filters.size_gt.is_some() || filters.size_lt.is_some() {
+        stages.push((65, FilterStage::SizeRange));
+    }
+    if filters.modified_after.is_some() || filters.modified_before.is_some() {
+        stages.push((45, FilterStage::ModifiedRange));
+    }
+    if filters.created_after.is_some() || filters.created_before.is_some() {
+        stages.push((40, FilterStage::CreatedRange));
+    }
+
+    stages.sort_by(|a, b| b.0.cmp(&a.0));
+    stages.into_iter().map(|(_, stage)| stage).collect()
+}
+
 fn prepare_filters(filters: &[Filter]) -> PreparedFilters {
     let extensions: HashSet<String> = filters.iter()
         .filter(|f| f.kind == "extension")
@@ -207,9 +332,16 @@ fn prepare_filters(filters: &[Filter]) -> PreparedFilters {
     let path_contains: Vec<String> = filters.iter()
         .filter(|f| f.kind == "path_contains")
         .filter_map(|f| f.value.as_deref())
-        .map(|s| s.trim().to_ascii_lowercase())
+        .map(normalize_path_text)
         .filter(|s| !s.is_empty())
         .collect();
+
+    let path_prefix = filters
+        .iter()
+        .find(|f| f.kind == "path_prefix")
+        .and_then(|f| f.value.as_deref())
+        .map(normalize_path_text)
+        .filter(|s| !s.is_empty());
 
     let size_gt = filters.iter().find(|f| f.kind == "size_gt")
         .and_then(|f| parse_size(
@@ -232,15 +364,37 @@ fn prepare_filters(filters: &[Filter]) -> PreparedFilters {
     let created_before  = filters.iter().find(|f| f.kind == "created_before")
         .and_then(|f| f.value.as_deref()).and_then(parse_date);
 
+    let modified_range = filters.iter().find(|f| f.kind == "modified_range");
+    let modified_range_start = modified_range
+        .and_then(|f| f.value.as_deref())
+        .and_then(parse_date);
+    let modified_range_end = modified_range
+        .and_then(|f| f.value2.as_deref())
+        .and_then(parse_date_end_exclusive);
+
+    let created_range = filters.iter().find(|f| f.kind == "created_range");
+    let created_range_start = created_range
+        .and_then(|f| f.value.as_deref())
+        .and_then(parse_date);
+    let created_range_end = created_range
+        .and_then(|f| f.value2.as_deref())
+        .and_then(parse_date_end_exclusive);
+
+    let modified_after = merge_lower_bound(modified_after, modified_range_start);
+    let modified_before = merge_upper_bound(modified_before, modified_range_end);
+    let created_after = merge_lower_bound(created_after, created_range_start);
+    let created_before = merge_upper_bound(created_before, created_range_end);
+
     let file_only   = filters.iter().any(|f| f.kind == "file_only");
     let folder_only = filters.iter().any(|f| f.kind == "folder_only");
     let hidden      = filters.iter().any(|f| f.kind == "hidden");
     let readonly    = filters.iter().any(|f| f.kind == "readonly");
 
-    PreparedFilters {
+    let mut prepared = PreparedFilters {
         extensions,
         name_contains,
         path_contains,
+        path_prefix,
         size_gt,
         size_lt,
         modified_after,
@@ -251,12 +405,157 @@ fn prepare_filters(filters: &[Filter]) -> PreparedFilters {
         folder_only,
         hidden,
         readonly,
-    }
+        stage_order: Vec::new(),
+    };
+
+    prepared.stage_order = build_filter_stage_order(&prepared);
+    prepared
 }
 
 fn entry_matches(path: &Path, metadata: &Metadata, filters: &PreparedFilters) -> bool {
     let is_dir = metadata.is_dir();
+    let mut path_normalized_cache: Option<String> = None;
+    let mut modified_secs_cache: Option<Option<i64>> = None;
+    let mut created_secs_cache: Option<Option<i64>> = None;
 
+    for stage in &filters.stage_order {
+        match stage {
+            FilterStage::EntryKind => {
+                if filters.file_only && is_dir {
+                    return false;
+                }
+                if filters.folder_only && !is_dir {
+                    return false;
+                }
+            }
+            FilterStage::Extension => {
+                let ext = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| format!(".{}", e.to_ascii_lowercase()))
+                    .unwrap_or_default();
+                if !filters.extensions.contains(&ext) {
+                    return false;
+                }
+            }
+            FilterStage::PathPrefix => {
+                let path_normalized = path_normalized_cache
+                    .get_or_insert_with(|| normalize_path_for_match(path));
+                if let Some(prefix) = filters.path_prefix.as_deref() {
+                    if !path_starts_with_component(path_normalized, prefix) {
+                        return false;
+                    }
+                }
+            }
+            FilterStage::NameContains => {
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if !filters.name_contains.iter().all(|n| name.contains(n)) {
+                    return false;
+                }
+            }
+            FilterStage::PathContains => {
+                let path_normalized = path_normalized_cache
+                    .get_or_insert_with(|| normalize_path_for_match(path));
+                if !filters
+                    .path_contains
+                    .iter()
+                    .all(|p| path_normalized.contains(p))
+                {
+                    return false;
+                }
+            }
+            FilterStage::Hidden => {
+                let attrs = metadata.file_attributes();
+                if attrs & 0x2 == 0 {
+                    return false;
+                }
+            }
+            FilterStage::Readonly => {
+                if !metadata.permissions().readonly() {
+                    return false;
+                }
+            }
+            FilterStage::SizeRange => {
+                let size = metadata.len();
+                if let Some(gt) = filters.size_gt {
+                    if size <= gt {
+                        return false;
+                    }
+                }
+                if let Some(lt) = filters.size_lt {
+                    if size >= lt {
+                        return false;
+                    }
+                }
+            }
+            FilterStage::ModifiedRange => {
+                let secs_opt = match modified_secs_cache {
+                    Some(value) => value,
+                    None => {
+                        let value = metadata
+                            .modified()
+                            .ok()
+                            .and_then(system_time_to_unix_secs);
+                        modified_secs_cache = Some(value);
+                        value
+                    }
+                };
+
+                let secs = match secs_opt {
+                    Some(secs) => secs,
+                    None => return false,
+                };
+
+                // Lower-bound check first, then upper-bound check to short-circuit quickly.
+                if let Some(after) = filters.modified_after {
+                    if secs <= after {
+                        return false;
+                    }
+                }
+                if let Some(before) = filters.modified_before {
+                    if secs >= before {
+                        return false;
+                    }
+                }
+            }
+            FilterStage::CreatedRange => {
+                let secs_opt = match created_secs_cache {
+                    Some(value) => value,
+                    None => {
+                        let value = metadata.created().ok().and_then(system_time_to_unix_secs);
+                        created_secs_cache = Some(value);
+                        value
+                    }
+                };
+
+                let secs = match secs_opt {
+                    Some(secs) => secs,
+                    None => return false,
+                };
+
+                // Lower-bound check first, then upper-bound check to short-circuit quickly.
+                if let Some(after) = filters.created_after {
+                    if secs <= after {
+                        return false;
+                    }
+                }
+                if let Some(before) = filters.created_before {
+                    if secs >= before {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+
+    true
+}
+
+fn entry_matches_without_metadata(path: &Path, is_dir: bool, filters: &PreparedFilters) -> bool {
     if filters.file_only && is_dir {
         return false;
     }
@@ -264,19 +563,9 @@ fn entry_matches(path: &Path, metadata: &Metadata, filters: &PreparedFilters) ->
         return false;
     }
 
-    if filters.hidden {
-        let attrs = metadata.file_attributes();
-        if attrs & 0x2 == 0 {
-            return false;
-        }
-    }
-
-    if filters.readonly && !metadata.permissions().readonly() {
-        return false;
-    }
-
     if !filters.extensions.is_empty() {
-        let ext = path.extension()
+        let ext = path
+            .extension()
             .and_then(|e| e.to_str())
             .map(|e| format!(".{}", e.to_ascii_lowercase()))
             .unwrap_or_default();
@@ -286,7 +575,8 @@ fn entry_matches(path: &Path, metadata: &Metadata, filters: &PreparedFilters) ->
     }
 
     if !filters.name_contains.is_empty() {
-        let name = path.file_name()
+        let name = path
+            .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
@@ -295,11 +585,37 @@ fn entry_matches(path: &Path, metadata: &Metadata, filters: &PreparedFilters) ->
         }
     }
 
-    if !filters.path_contains.is_empty() {
-        let path_lower = path.to_string_lossy().to_ascii_lowercase();
-        if !filters.path_contains.iter().all(|p| path_lower.contains(p)) {
+    if !filters.path_contains.is_empty() || filters.path_prefix.is_some() {
+        let path_normalized = normalize_path_for_match(path);
+
+        if let Some(prefix) = filters.path_prefix.as_deref() {
+            if !path_starts_with_component(&path_normalized, prefix) {
+                return false;
+            }
+        }
+
+        if !filters
+            .path_contains
+            .iter()
+            .all(|p| path_normalized.contains(p))
+        {
             return false;
         }
+    }
+
+    true
+}
+
+fn entry_matches_with_metadata(metadata: &Metadata, filters: &PreparedFilters) -> bool {
+    if filters.hidden {
+        let attrs = metadata.file_attributes();
+        if attrs & 0x2 == 0 {
+            return false;
+        }
+    }
+
+    if filters.readonly && !metadata.permissions().readonly() {
+        return false;
     }
 
     let size = metadata.len();
@@ -314,13 +630,8 @@ fn entry_matches(path: &Path, metadata: &Metadata, filters: &PreparedFilters) ->
         }
     }
 
-    let modified_secs = metadata
-        .modified()
-        .ok()
-        .and_then(system_time_to_unix_secs);
-
     if filters.modified_after.is_some() || filters.modified_before.is_some() {
-        let secs = match modified_secs {
+        let secs = match metadata.modified().ok().and_then(system_time_to_unix_secs) {
             Some(secs) => secs,
             None => return false,
         };
@@ -566,35 +877,70 @@ fn search_impl(query: SearchQuery, roots: Vec<PathBuf>, max_results: usize) -> V
     let per_root: Vec<Vec<FileEntry>> = roots
         .into_par_iter()
         .map(|root| {
-            let mut root_results = Vec::new();
-
-            for entry in WalkDir::new(root)
+            let walk_iter = WalkDir::new(root)
                 .follow_links(false)
                 .into_iter()
-                .filter_map(|e| e.ok())
-            {
-                if remaining.load(Ordering::Acquire) == 0 {
-                    break;
-                }
+                .filter_entry(|entry| {
+                    !entry.file_type().is_dir()
+                        || can_descend_into_dir(entry.path(), filters.as_ref())
+                });
 
-                let path = entry.path();
-                let metadata = match entry.metadata() {
-                    Ok(m) => m,
-                    Err(_) => continue,
-                };
+            let root_state = walk_iter
+                .par_bridge()
+                .fold(
+                    || (Vec::new(), 0usize),
+                    |mut state, entry_result| {
+                        if remaining.load(Ordering::Acquire) == 0 {
+                            return state;
+                        }
 
-                if !entry_matches(path, &metadata, filters.as_ref()) {
-                    continue;
-                }
+                        let entry = match entry_result {
+                            Ok(entry) => entry,
+                            Err(_) => return state,
+                        };
 
-                if !try_claim_result_slot(remaining.as_ref()) {
-                    break;
-                }
+                        let is_dir = entry.file_type().is_dir();
+                        let path = entry.path();
 
-                root_results.push(to_file_entry(path, &metadata));
+                        if !entry_matches_without_metadata(path, is_dir, filters.as_ref()) {
+                            return state;
+                        }
+
+                        let metadata = match entry.metadata() {
+                            Ok(meta) => meta,
+                            Err(_) => return state,
+                        };
+
+                        if !entry_matches_with_metadata(&metadata, filters.as_ref()) {
+                            return state;
+                        }
+
+                        if state.1 == 0 {
+                            state.1 = claim_result_budget(remaining.as_ref(), 32);
+                            if state.1 == 0 {
+                                return state;
+                            }
+                        }
+
+                        state.1 -= 1;
+                        state.0.push(to_file_entry(path, &metadata));
+                        state
+                    },
+                )
+                .reduce(
+                    || (Vec::new(), 0usize),
+                    |mut left, mut right| {
+                        left.0.append(&mut right.0);
+                        left.1 += right.1;
+                        left
+                    },
+                );
+
+            if root_state.1 > 0 {
+                remaining.fetch_add(root_state.1, Ordering::AcqRel);
             }
 
-            root_results
+            root_state.0
         })
         .collect();
 

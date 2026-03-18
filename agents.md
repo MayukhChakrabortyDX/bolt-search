@@ -48,6 +48,7 @@ struct Filter {
     #[serde(rename = "type")]
     kind: String,
     value: Option<String>,
+    value2: Option<String>,
     unit: Option<String>,
 }
 ```
@@ -121,13 +122,16 @@ Supported filter types:
 - `extension`
 - `name_contains`
 - `path_contains`
+- `path_prefix`
 - `subfolder`
 - `size_gt`
 - `size_lt`
 - `modified_after`
 - `modified_before`
+- `modified_range`
 - `created_after`
 - `created_before`
+- `created_range`
 - `drive`
 - `hidden`
 - `readonly`
@@ -155,6 +159,8 @@ Current rules:
 - `size_gt >= size_lt`
 - `modified_after >= modified_before`
 - `created_after >= created_before`
+- `modified_range` start date must be <= end date
+- `created_range` start date must be <= end date
 - `file_only` and `folder_only` both present
 
 ---
