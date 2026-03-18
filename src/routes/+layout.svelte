@@ -7,6 +7,7 @@
 	const { children } = $props();
 	const appWindow = getCurrentWindow();
 	let isDarkMode = $state(false);
+	let streamingEnabled = $state(true);
 	let dragRegionEl: HTMLDivElement | null = null;
 	type ThemePreference = 'system' | 'light' | 'dark';
 	let themePreference: ThemePreference = 'system';
@@ -29,6 +30,16 @@
 		applyTheme(isDarkMode);
 	}
 
+	function syncStreamingPreference(enabled: boolean) {
+		streamingEnabled = enabled;
+		localStorage.setItem('bolt-search-streaming-enabled', enabled ? '1' : '0');
+		window.dispatchEvent(
+			new CustomEvent('bolt-streaming-mode-changed', {
+				detail: { enabled },
+			})
+		);
+	}
+
 	onMount(() => {
 		themeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
 		const stored = localStorage.getItem('bolt-search-theme-preference');
@@ -44,6 +55,16 @@
 
 		themeMediaQuery.addEventListener('change', onSystemThemeChange);
 		applyResolvedTheme();
+
+		const storedStreaming = localStorage.getItem('bolt-search-streaming-enabled');
+		streamingEnabled = !(storedStreaming === '0' || storedStreaming === 'false');
+		localStorage.removeItem('bolt-search-backend-mode');
+		window.dispatchEvent(
+			new CustomEvent('bolt-streaming-mode-changed', {
+				detail: { enabled: streamingEnabled },
+			})
+		);
+
 		void appWindow.setContentProtected(false).catch(() => {
 			// Ignore permission/platform failures; app remains usable.
 		});
@@ -65,6 +86,10 @@
 		themePreference = isDarkMode ? 'light' : 'dark';
 		localStorage.setItem('bolt-search-theme-preference', themePreference);
 		applyResolvedTheme();
+	}
+
+	function toggleStreamingMode() {
+		syncStreamingPreference(!streamingEnabled);
 	}
 
 	async function startDrag(event: MouseEvent) {
@@ -103,8 +128,7 @@
 <div class="app-shell">
 	<header class="window-titlebar" data-tauri-drag-region>
 		<div class="window-drag-region" data-tauri-drag-region bind:this={dragRegionEl}>
-			<span class="window-dot" aria-hidden="true"></span>
-			<span class="window-title">Bolt Search</span>
+			<span class="window-title">Bolt Search Software</span>
 		</div>
 		<div class="window-controls">
 			<button
@@ -124,6 +148,16 @@
 				title="Load Filter"
 			>
 				<FileDown size={13} strokeWidth={2} />
+			</button>
+			<button
+				class="window-control-button topbar-toggle"
+				type="button"
+				aria-label={streamingEnabled ? 'Disable streaming mode' : 'Enable streaming mode'}
+				title={streamingEnabled ? 'Streaming mode enabled' : 'Streaming mode disabled'}
+				onclick={toggleStreamingMode}
+			>
+				<span class={`streaming-indicator ${streamingEnabled ? 'on' : ''}`}></span>
+				<span class="topbar-toggle-label">Stream</span>
 			</button>
 			<button
 				class="window-control-button theme-toggle"

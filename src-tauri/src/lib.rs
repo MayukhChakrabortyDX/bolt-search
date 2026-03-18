@@ -11,6 +11,8 @@ use rayon::prelude::*;
 use walkdir::WalkDir;
 use chrono::NaiveDate;
 
+mod streaming;
+
 static THREAD_POOL_CACHE: OnceLock<Mutex<Vec<(usize, Arc<rayon::ThreadPool>)>>> = OnceLock::new();
 
 // ── Input types ───────────────────────────────────────────────────────────────
@@ -30,7 +32,7 @@ struct Filter {
 
 // ── Output types ──────────────────────────────────────────────────────────────
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
 struct FileEntry {
     name: String,
     path: String,
@@ -420,10 +422,14 @@ fn scan_folder_once(folder: &Path, filters: &PreparedFilters) -> FolderScanResul
 // ── Commands ──────────────────────────────────────────────────────────────────
 
 #[tauri::command]
-fn search(query: SearchQuery) -> Result<Vec<FileEntry>, String> {
+async fn search(query: SearchQuery) -> Result<Vec<FileEntry>, String> {
     let roots = roots_from_drive_filters(&query.filters);
-    std::panic::catch_unwind(|| search_impl(query, roots, 10_000))
-        .map_err(|_| "Search failed due to an internal error".to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        std::panic::catch_unwind(|| search_impl(query, roots, 10_000))
+            .map_err(|_| "Search failed due to an internal error".to_string())
+    })
+    .await
+    .map_err(|e| format!("Search task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -458,20 +464,24 @@ fn list_subfolders(root: String) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-fn search_in_root(query: SearchQuery, root: String, limit: Option<usize>) -> Result<Vec<FileEntry>, String> {
+async fn search_in_root(query: SearchQuery, root: String, limit: Option<usize>) -> Result<Vec<FileEntry>, String> {
     let cap = limit.unwrap_or(10_000).clamp(1, 10_000);
-    std::panic::catch_unwind(|| {
-        let root_path = PathBuf::from(root);
-        if !root_path.exists() {
-            return Vec::new();
-        }
-        search_impl(query, vec![root_path], cap)
+    tauri::async_runtime::spawn_blocking(move || {
+        std::panic::catch_unwind(|| {
+            let root_path = PathBuf::from(root);
+            if !root_path.exists() {
+                return Vec::new();
+            }
+            search_impl(query, vec![root_path], cap)
+        })
+        .map_err(|_| "Progressive search failed due to an internal error".to_string())
     })
-    .map_err(|_| "Progressive search failed due to an internal error".to_string())
+    .await
+    .map_err(|e| format!("Progressive search task failed: {e}"))?
 }
 
 #[tauri::command]
-fn search_folder_batch(
+async fn search_folder_batch(
     query: SearchQuery,
     folders: Vec<String>,
     limit: Option<usize>,
@@ -480,8 +490,12 @@ fn search_folder_batch(
     let cap = limit.unwrap_or(1_000).clamp(1, 10_000);
     let workers = thread_limit.unwrap_or(4).clamp(1, 16);
 
-    std::panic::catch_unwind(|| search_folder_batch_impl(query, folders, cap, workers))
-        .map_err(|_| "Folder batch search failed due to an internal error".to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        std::panic::catch_unwind(|| search_folder_batch_impl(query, folders, cap, workers))
+            .map_err(|_| "Folder batch search failed due to an internal error".to_string())?
+    })
+    .await
+    .map_err(|e| format!("Folder batch task failed: {e}"))?
 }
 
 fn search_folder_batch_impl(
@@ -671,6 +685,9 @@ pub fn run() {
         list_subfolders,
         search_in_root,
         search_folder_batch,
+        streaming::cancel_search,
+        streaming::search_streaming,
+        streaming::search_with_progress,
         open_in_explorer,
         save_filter_file,
         load_filter_file

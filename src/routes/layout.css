@@ -130,6 +130,33 @@ html[data-theme='dark'] .window-titlebar {
     width: 36px;
 }
 
+.topbar-toggle {
+    width: auto;
+    min-width: 84px;
+    gap: 7px;
+    padding: 0 12px;
+    border-left: 1px solid var(--stroke);
+}
+
+.topbar-toggle-label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+}
+
+.streaming-indicator {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: #71717a;
+    transition: background-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.streaming-indicator.on {
+    background: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
 .window-control-button {
     width: 46px;
     border: none;
