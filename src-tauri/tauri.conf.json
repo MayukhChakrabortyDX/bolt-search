@@ -18,6 +18,8 @@
         "minWidth": 1280,
         "minHeight": 720,
         "maximized": true,
+        "visible": false,
+        "transparent": true,
         "decorations": false
       }
     ],

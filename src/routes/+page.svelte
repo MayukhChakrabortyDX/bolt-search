@@ -525,6 +525,8 @@
                 }
             } catch {
                 availableRoots = [];
+            } finally {
+                window.dispatchEvent(new CustomEvent("bolt-ui-ready"));
             }
         })();
 
@@ -1519,7 +1521,7 @@
 
 </script>
 
-<div class="w-full h-full flex flex-row">
+<div class="w-full h-full flex flex-row bg-white dark:bg-zinc-900">
     <!-- Sidebar -->
     <div
         class="sidebar-panel w-[360px] min-w-[320px] h-full bg-zinc-50 border-r border-zinc-200 dark:bg-zinc-950 dark:border-zinc-800 flex flex-col p-4 gap-3"

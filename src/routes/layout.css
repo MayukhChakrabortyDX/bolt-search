@@ -90,12 +90,12 @@ html,
 body {
     height: 100%;
     margin: 0;
-    background: radial-gradient(circle at 15% -10%, #fafafa 0%, #f4f4f5 52%, #e4e4e7 100%);
+    background: transparent;
 }
 
 html[data-theme='dark'],
 html[data-theme='dark'] body {
-    background: #181818;
+    background: transparent;
 }
 
 body {
@@ -107,7 +107,7 @@ body {
     height: 100vh;
     display: flex;
     flex-direction: column;
-    background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 70%, transparent) 0%, color-mix(in srgb, var(--surface) 96%, transparent) 100%);
+    background: var(--surface);
 }
 
 html[data-theme='dark'] .app-shell {
@@ -119,9 +119,8 @@ html[data-theme='dark'] .app-shell {
     display: flex;
     align-items: stretch;
     justify-content: space-between;
-    background: color-mix(in srgb, var(--panel) 88%, transparent);
+    background: var(--panel);
     border-bottom: 1px solid var(--stroke);
-    backdrop-filter: blur(8px);
 }
 
 html[data-theme='dark'] .window-titlebar {

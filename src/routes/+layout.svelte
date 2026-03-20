@@ -41,6 +41,31 @@
 	}
 
 	onMount(() => {
+		let hasShownWindow = false;
+
+		const showWindowOnce = () => {
+			if (hasShownWindow) return;
+			hasShownWindow = true;
+
+			void (async () => {
+				await new Promise<void>((resolve) => {
+					requestAnimationFrame(() => {
+						requestAnimationFrame(() => resolve());
+					});
+				});
+
+				await appWindow.show().catch((error) => {
+					console.error('Failed to show startup window:', error);
+				});
+			})();
+		};
+
+		const onUiReady = () => {
+			showWindowOnce();
+		};
+
+		window.addEventListener('bolt-ui-ready', onUiReady, { once: true });
+
 		themeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
 		const stored = localStorage.getItem('bolt-search-theme-preference');
 		if (stored === 'dark' || stored === 'light' || stored === 'system') {
@@ -74,6 +99,7 @@
 		}
 
 		return () => {
+			window.removeEventListener('bolt-ui-ready', onUiReady);
 			themeMediaQuery?.removeEventListener('change', onSystemThemeChange);
 			themeMediaQuery = null;
 			if (dragRegionEl) {

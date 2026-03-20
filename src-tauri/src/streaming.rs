@@ -23,6 +23,8 @@ const MAX_WORKERS: usize = 16;
 const MIN_BATCH_SIZE: usize = 8;
 const MAX_BATCH_SIZE: usize = 48;
 const MAX_PROGRESS_ENTRIES_PER_EVENT: usize = 256;
+const PROGRESS_HEARTBEAT_INTERVAL_MS: u64 = 1_000;
+const SLOW_ROUND_LOG_MS: u64 = 1_500;
 
 static ACTIVE_SEARCH_RUN_ID: AtomicU64 = AtomicU64::new(0);
 static CANCEL_REQUEST_RUN_ID: AtomicU64 = AtomicU64::new(0);
@@ -279,7 +281,6 @@ pub fn cancel_search(run_id: Option<u64>) -> Result<(), String> {
 struct FolderScanState {
     path: PathBuf,
     reader: Option<fs::ReadDir>,
-    buffered_subfolders: Vec<String>,
     started: bool,
 }
 
@@ -288,7 +289,6 @@ impl FolderScanState {
         Self {
             path,
             reader: None,
-            buffered_subfolders: Vec::new(),
             started: false,
         }
     }
@@ -420,6 +420,7 @@ fn run_walkdir_search(
     let mut total_results = 0usize;
     let mut final_entries: Vec<FileEntry> = Vec::new();
     let mut cancelled = false;
+    let mut last_progress_emit = Instant::now();
 
     let (progress_tx, progress_rx) = mpsc::channel::<ProgressQueueMessage>();
     let flush_interval = Duration::from_millis(CHANNEL_EMIT_INTERVAL_MS);
@@ -460,6 +461,7 @@ fn run_walkdir_search(
             }
         }
 
+        let round_started_at = Instant::now();
         let chunk_results: Vec<(FolderScanState, FolderChunkResult)> = pool.install(|| {
             round_states
                 .into_par_iter()
@@ -473,14 +475,19 @@ fn run_walkdir_search(
                 })
                 .collect()
         });
+        let round_elapsed = round_started_at.elapsed();
 
         if is_run_cancelled(run_id) {
             cancelled = true;
             break;
         }
 
-        for (mut state, mut chunk) in chunk_results.into_iter() {
-            state.buffered_subfolders.append(&mut chunk.discovered_subfolders);
+        for (state, mut chunk) in chunk_results.into_iter() {
+            for subfolder in chunk.discovered_subfolders.drain(..) {
+                if seen_folders.insert(subfolder.clone()) {
+                    queue.push_back(FolderScanState::new(PathBuf::from(subfolder)));
+                }
+            }
 
             if total_results < cap && !chunk.entries.is_empty() {
                 let remaining = cap.saturating_sub(total_results);
@@ -505,16 +512,35 @@ fn run_walkdir_search(
             if chunk.exhausted {
                 scanned_folders += 1;
                 round_finished_folders.push(state.path.to_string_lossy().to_string());
-
-                for subfolder in state.buffered_subfolders {
-                    if seen_folders.insert(subfolder.clone()) {
-                        queue.push_back(FolderScanState::new(PathBuf::from(subfolder)));
-                    }
-                }
             } else {
                 queue.push_back(state);
             }
         }
+
+        if round_elapsed >= Duration::from_millis(SLOW_ROUND_LOG_MS) {
+            let sample = if round_started_folders.is_empty() {
+                "<none>".to_string()
+            } else {
+                round_started_folders
+                    .iter()
+                    .take(3)
+                    .cloned()
+                    .collect::<Vec<String>>()
+                    .join(" | ")
+            };
+
+            eprintln!(
+                "[search-stream] slow round run_id={} elapsed_ms={} round_folders={} queue_after={} scanned_folders={} total_results={} sample={}",
+                run_id,
+                round_elapsed.as_millis(),
+                round_started_folders.len(),
+                queue.len(),
+                scanned_folders,
+                total_results,
+                sample,
+            );
+        }
+
         if !round_started_folders.is_empty()
             || !round_finished_folders.is_empty()
             || !round_entries.is_empty()
@@ -528,6 +554,20 @@ fn run_walkdir_search(
                     total_results,
                 }))
                 .map_err(|e| e.to_string())?;
+            last_progress_emit = Instant::now();
+        } else if last_progress_emit.elapsed()
+            >= Duration::from_millis(PROGRESS_HEARTBEAT_INTERVAL_MS)
+        {
+            progress_tx
+                .send(ProgressQueueMessage::Delta(ProgressQueuePayload {
+                    started_folders: Vec::new(),
+                    finished_folders: Vec::new(),
+                    entries: Vec::new(),
+                    scanned_folders,
+                    total_results,
+                }))
+                .map_err(|e| e.to_string())?;
+            last_progress_emit = Instant::now();
         }
     }
 
