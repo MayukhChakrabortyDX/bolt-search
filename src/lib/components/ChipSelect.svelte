@@ -9,14 +9,14 @@
 
     let {
         value = $bindable(""),
-        options = [] as ChipSelectOption[],
+        options = [] as ReadonlyArray<ChipSelectOption>,
         ariaLabel = "Select option",
         placeholder = "Select...",
         containerClass = "",
         onChange,
     }: {
         value?: string;
-        options?: ChipSelectOption[];
+        options?: ReadonlyArray<ChipSelectOption>;
         ariaLabel?: string;
         placeholder?: string;
         containerClass?: string;

@@ -1,13 +1,18 @@
 <script lang="ts">
     import { onMount } from "svelte";
     import { Calendar, X } from "lucide-svelte";
-
-    type CalendarCell = {
-        iso: string;
-        day: number;
-        inCurrentMonth: boolean;
-        isToday: boolean;
-    };
+    import "./CalendarField.css";
+    import {
+        WEEKDAY_LABELS,
+        YEAR_OPTIONS,
+        MONTH_OPTIONS,
+        buildCalendarCells,
+        clampMonthToBounds,
+        dateLabelFormatter,
+        formatIsoDate,
+        parseIsoDate,
+        startOfMonth,
+    } from "./CalendarField.utils";
 
     let {
         value = $bindable(""),
@@ -20,27 +25,6 @@
         placeholder?: string;
         containerClass?: string;
     } = $props();
-
-    const weekdayLabels = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
-    const MIN_YEAR = 1950;
-    const MAX_YEAR = new Date().getFullYear();
-    const monthLabelFormatter = new Intl.DateTimeFormat(undefined, {
-        month: "short",
-    });
-    const dateLabelFormatter = new Intl.DateTimeFormat(undefined, {
-        year: "numeric",
-        month: "short",
-        day: "2-digit",
-    });
-
-    const monthOptions = Array.from({ length: 12 }, (_, monthIndex) => ({
-        value: monthIndex,
-        label: monthLabelFormatter.format(new Date(2000, monthIndex, 1)),
-    }));
-    const yearOptions = Array.from(
-        { length: MAX_YEAR - MIN_YEAR + 1 },
-        (_, index) => MIN_YEAR + index,
-    );
 
     let open = $state(false);
     let yearListEl = $state<HTMLDivElement | null>(null);
@@ -66,78 +50,8 @@
         activeMonth = clampMonthToBounds(startOfMonth(parsed));
     });
 
-    function pad2(value: number): string {
-        return String(value).padStart(2, "0");
-    }
-
-    function formatIsoDate(date: Date): string {
-        return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
-    }
-
-    function parseIsoDate(raw: string): Date | null {
-        const match = raw.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
-        if (!match) return null;
-
-        const year = Number(match[1]);
-        const monthIndex = Number(match[2]) - 1;
-        const day = Number(match[3]);
-        const parsed = new Date(year, monthIndex, day);
-
-        if (
-            parsed.getFullYear() !== year ||
-            parsed.getMonth() !== monthIndex ||
-            parsed.getDate() !== day
-        ) {
-            return null;
-        }
-
-        return parsed;
-    }
-
-    function startOfMonth(date: Date): Date {
-        return new Date(date.getFullYear(), date.getMonth(), 1);
-    }
-
-    function clampYear(year: number): number {
-        return Math.max(MIN_YEAR, Math.min(MAX_YEAR, year));
-    }
-
-    function clampMonthToBounds(date: Date): Date {
-        return new Date(clampYear(date.getFullYear()), date.getMonth(), 1);
-    }
-
-    function isSameDate(a: Date, b: Date): boolean {
-        return (
-            a.getFullYear() === b.getFullYear() &&
-            a.getMonth() === b.getMonth() &&
-            a.getDate() === b.getDate()
-        );
-    }
-
-    function buildCalendarCells(month: Date): CalendarCell[] {
-        const year = month.getFullYear();
-        const monthIndex = month.getMonth();
-        const firstOfMonth = new Date(year, monthIndex, 1);
-        const gridStart = new Date(year, monthIndex, 1 - firstOfMonth.getDay());
-        const today = new Date();
-        const cells: CalendarCell[] = [];
-
-        for (let offset = 0; offset < 42; offset += 1) {
-            const date = new Date(gridStart);
-            date.setDate(gridStart.getDate() + offset);
-            cells.push({
-                iso: formatIsoDate(date),
-                day: date.getDate(),
-                inCurrentMonth: date.getMonth() === monthIndex,
-                isToday: isSameDate(date, today),
-            });
-        }
-
-        return cells;
-    }
-
     function setActiveMonth(year: number, monthIndex: number) {
-        activeMonth = new Date(clampYear(year), monthIndex, 1);
+        activeMonth = clampMonthToBounds(new Date(year, monthIndex, 1));
     }
 
     function chooseMonth(monthIndex: number) {
@@ -258,7 +172,7 @@
                 <aside class="flex min-h-0 flex-col border-r border-zinc-300 py-1 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950/50">
                     <div class="year-scroll-overlay flex-1 overflow-y-auto p-1.5" bind:this={yearListEl}>
                         <div class="year-scroll-content">
-                            {#each yearOptions as year}
+                            {#each YEAR_OPTIONS as year}
                                 <button
                                     type="button"
                                     data-year={year}
@@ -281,7 +195,7 @@
                                 Month
                             </span>
                             <span class="text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">
-                                {monthOptions[activeMonth.getMonth()]?.label} {activeMonth.getFullYear()}
+                                {MONTH_OPTIONS[activeMonth.getMonth()]?.label} {activeMonth.getFullYear()}
                             </span>
                             <button
                                 type="button"
@@ -294,7 +208,7 @@
                         </div>
 
                         <div class="flex gap-1 overflow-x-auto pb-1">
-                            {#each monthOptions as option}
+                            {#each MONTH_OPTIONS as option}
                                 <button
                                     type="button"
                                     class={`shrink-0 rounded-md px-2 py-1 text-[11px] font-semibold transition-colors ${activeMonth.getMonth() === option.value
@@ -310,7 +224,7 @@
 
                     <div class="overflow-y-auto p-3">
                         <div class="mb-1 grid grid-cols-7 gap-1">
-                            {#each weekdayLabels as weekday}
+                            {#each WEEKDAY_LABELS as weekday}
                                 <span class="py-1 text-center text-[10px] font-semibold uppercase tracking-[0.05em] text-zinc-400 dark:text-zinc-500">
                                     {weekday}
                                 </span>
@@ -369,38 +283,3 @@
         </div>
     {/if}
 </div>
-
-<style>
-    .year-scroll-overlay {
-        /* Keep the scrollbar visually inside the year pane. */
-        overflow-y: auto;
-        overflow-x: hidden;
-        scrollbar-width: thin;
-        scrollbar-color: rgba(113, 113, 122, 0.65) transparent;
-    }
-
-    .year-scroll-content {
-        /* Reserve a slim gutter so thumb overlays this area, not the text. */
-        padding-right: 0.5rem;
-    }
-
-    .year-scroll-overlay::-webkit-scrollbar {
-        width: 8px;
-    }
-
-    .year-scroll-overlay::-webkit-scrollbar-track {
-        background: transparent;
-    }
-
-    .year-scroll-overlay::-webkit-scrollbar-thumb {
-        border-radius: 999px;
-        background: rgba(113, 113, 122, 0.65);
-        border: 2px solid transparent;
-        background-clip: content-box;
-    }
-
-    .year-scroll-overlay::-webkit-scrollbar-thumb:hover {
-        background: rgba(113, 113, 122, 0.9);
-        background-clip: content-box;
-    }
-</style>
