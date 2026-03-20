@@ -70,33 +70,39 @@
 </script>
 
 <div
-    class={`chip-select ${containerClass}`}
+    class={`relative w-full ${containerClass}`}
     bind:this={rootEl}
 >
     <button
         type="button"
-        class="chip-select-trigger"
+        class="inline-flex h-7.5 min-h-7.5 w-full items-center justify-between gap-2 rounded-md border border-zinc-300 bg-white dark:border-zinc-700 dark:bg-zinc-900 px-2 text-left text-xs text-zinc-700 dark:text-zinc-200 transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800 focus-visible:border-zinc-500 focus-visible:outline-none"
         aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-expanded={open}
         onclick={toggleOpen}
     >
-        <span class={`chip-select-label ${selected ? "" : "placeholder"}`}>
+        <span class={`min-w-0 overflow-hidden text-ellipsis whitespace-nowrap ${selected ? "" : "text-zinc-400 dark:text-zinc-500"}`}>
             {selected ? selected.label : placeholder}
         </span>
         <ChevronDown
             size={13}
             strokeWidth={2}
-            class={`chip-select-caret ${open ? "open" : ""}`}
+            class={`shrink-0 text-zinc-500 dark:text-zinc-400 transition-transform ${open ? "rotate-180" : ""}`}
         />
     </button>
 
     {#if open}
-        <div class="chip-select-menu" role="listbox" aria-label={ariaLabel}>
+        <div
+            class="absolute left-0 right-0 top-[calc(100%+0.35rem)] z-60 max-h-55 overflow-y-auto rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-1.5"
+            role="listbox"
+            aria-label={ariaLabel}
+        >
             {#each options as option (option.value)}
                 <button
                     type="button"
-                    class={`chip-select-option ${option.value === value ? "active" : ""}`}
+                    class={`w-full rounded-md px-2 py-1.5 text-left text-xs transition-colors ${option.value === value
+                        ? "bg-zinc-200 dark:bg-zinc-700 font-semibold text-zinc-800 dark:text-zinc-100"
+                        : "text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`}
                     role="option"
                     aria-selected={option.value === value}
                     onclick={() => choose(option.value)}
@@ -107,96 +113,3 @@
         </div>
     {/if}
 </div>
-
-<style>
-    .chip-select {
-        position: relative;
-        width: 100%;
-    }
-
-    .chip-select-trigger {
-        width: 100%;
-        height: var(--filter-control-height, 30px);
-        min-height: var(--filter-control-height, 30px);
-        border-radius: 0.45rem;
-        border: 1px solid color-mix(in srgb, var(--filter-accent) 22%, var(--control-border));
-        background: color-mix(in srgb, var(--panel) 90%, transparent);
-        color: var(--control-text);
-        padding: 0 0.5rem;
-        display: inline-flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 0.45rem;
-        font-size: 0.75rem;
-        text-align: left;
-        transition: background-color 0.15s ease, border-color 0.15s ease;
-    }
-
-    .chip-select-trigger:hover {
-        background: color-mix(in srgb, var(--filter-accent) 14%, var(--control-bg-hover));
-        border-color: color-mix(in srgb, var(--filter-accent) 36%, var(--control-border));
-    }
-
-    .chip-select-trigger:focus-visible {
-        outline: none;
-        border-color: color-mix(in srgb, var(--filter-accent) 52%, var(--focus-ring));
-    }
-
-    .chip-select-label {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        min-width: 0;
-    }
-
-    .chip-select-label.placeholder {
-        color: var(--control-muted);
-    }
-
-    .chip-select-caret {
-        color: color-mix(in srgb, var(--filter-accent) 50%, var(--control-muted));
-        transition: transform 0.18s ease;
-        flex-shrink: 0;
-    }
-
-    .chip-select-caret.open {
-        transform: rotate(180deg);
-    }
-
-    .chip-select-menu {
-        position: absolute;
-        top: calc(100% + 0.35rem);
-        left: 0;
-        right: 0;
-        z-index: 60;
-        max-height: 220px;
-        overflow-y: auto;
-        padding: 0.35rem;
-        border-radius: 0.6rem;
-        border: 1px solid color-mix(in srgb, var(--filter-accent) 30%, var(--control-border));
-        background: color-mix(in srgb, var(--panel) 94%, transparent);
-    }
-
-    .chip-select-option {
-        width: 100%;
-        border: none;
-        border-radius: 0.4rem;
-        padding: 0.35rem 0.45rem;
-        background: transparent;
-        color: var(--control-text);
-        text-align: left;
-        font-size: 0.75rem;
-        cursor: pointer;
-        transition: background-color 0.15s ease, color 0.15s ease;
-    }
-
-    .chip-select-option:hover {
-        background: color-mix(in srgb, var(--filter-accent) 14%, transparent);
-    }
-
-    .chip-select-option.active {
-        background: color-mix(in srgb, var(--filter-accent) 22%, transparent);
-        color: color-mix(in srgb, var(--filter-accent) 70%, var(--control-text));
-        font-weight: 600;
-    }
-</style>

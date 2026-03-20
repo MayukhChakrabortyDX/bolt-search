@@ -1,6 +1,7 @@
 @import url(https://fonts.googleapis.com/css?family=Manrope:200,300,regular,500,600,700,800);
 
 @import 'tailwindcss';
+@custom-variant dark (&:where(.dark, .dark *));
 @plugin '@tailwindcss/forms';
 @plugin '@tailwindcss/typography';
 
@@ -223,45 +224,4 @@ html[data-theme='dark'] .window-titlebar {
 .app-content {
     flex: 1;
     min-height: 0;
-}
-
-html[data-theme='dark'] .bg-zinc-100 { background-color: #181818 !important; }
-html[data-theme='dark'] .bg-zinc-50 { background-color: #252526 !important; }
-html[data-theme='dark'] .bg-zinc-800 { background-color: #0e639c !important; }
-html[data-theme='dark'] .bg-white { background-color: #1f1f1f !important; }
-html[data-theme='dark'] .border-zinc-300 { border-color: #515151 !important; }
-html[data-theme='dark'] .border-zinc-200 { border-color: #3c3c3c !important; }
-html[data-theme='dark'] .border-zinc-100 { border-color: #2f2f2f !important; }
-html[data-theme='dark'] .text-zinc-700 { color: #e5e5e5 !important; }
-html[data-theme='dark'] .text-zinc-600 { color: #d4d4d4 !important; }
-html[data-theme='dark'] .text-zinc-500 { color: #bdbdbd !important; }
-html[data-theme='dark'] .text-zinc-400 { color: #9d9d9d !important; }
-html[data-theme='dark'] .hover\:bg-zinc-50:hover { background-color: #2a2d2e !important; }
-html[data-theme='dark'] .hover\:bg-zinc-700:hover { background-color: #1177bb !important; }
-html[data-theme='dark'] .sidebar-panel { border-right-color: #2f2f2f !important; }
-
-input,
-textarea,
-select {
-    color: var(--control-text);
-}
-
-html[data-theme='dark'] input,
-html[data-theme='dark'] textarea,
-html[data-theme='dark'] select {
-    background-color: var(--control-bg) !important;
-    border-color: var(--control-border) !important;
-    color: var(--control-text) !important;
-}
-
-html[data-theme='dark'] input::placeholder,
-html[data-theme='dark'] textarea::placeholder {
-    color: var(--control-muted) !important;
-}
-
-html[data-theme='dark'] input:focus,
-html[data-theme='dark'] textarea:focus,
-html[data-theme='dark'] select:focus {
-    border-color: #71717a !important;
-    box-shadow: 0 0 0 1px #71717a !important;
 }

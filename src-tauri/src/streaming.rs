@@ -1,8 +1,10 @@
 use std::collections::{HashSet, VecDeque};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::mpsc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
@@ -15,7 +17,7 @@ use crate::{
 };
 
 const FOLDER_CONTEXT_SWITCH_ITEMS: usize = 64;
-const CHANNEL_EMIT_INTERVAL_MS: u64 = 120;
+const CHANNEL_EMIT_INTERVAL_MS: u64 = 300;
 const MIN_WORKERS: usize = 2;
 const MAX_WORKERS: usize = 16;
 const MIN_BATCH_SIZE: usize = 8;
@@ -80,6 +82,25 @@ pub enum SearchStreamEvent {
     },
 }
 
+#[derive(Debug)]
+struct ProgressQueuePayload {
+    started_folders: Vec<String>,
+    finished_folders: Vec<String>,
+    entries: Vec<FileEntry>,
+    scanned_folders: usize,
+    total_results: usize,
+}
+
+#[derive(Debug)]
+enum ProgressQueueMessage {
+    Delta(ProgressQueuePayload),
+    Complete {
+        scanned_folders: usize,
+        total_results: usize,
+        truncated: bool,
+    },
+}
+
 fn emit_progress_chunked(
     on_event: &Channel<SearchStreamEvent>,
     pending_started_folders: &mut Vec<String>,
@@ -135,6 +156,114 @@ fn emit_progress_chunked(
     Ok(())
 }
 
+fn run_progress_flusher(
+    on_event: Channel<SearchStreamEvent>,
+    receiver: mpsc::Receiver<ProgressQueueMessage>,
+    flush_interval: Duration,
+) -> Result<(), String> {
+    let mut pending_started_folders: Vec<String> = Vec::new();
+    let mut pending_finished_folders: Vec<String> = Vec::new();
+    let mut pending_entries: Vec<FileEntry> = Vec::new();
+    let mut scanned_folders = 0usize;
+    let mut total_results = 0usize;
+    let mut last_flush = Instant::now();
+
+    loop {
+        match receiver.recv_timeout(flush_interval) {
+            Ok(ProgressQueueMessage::Delta(delta)) => {
+                pending_started_folders.extend(delta.started_folders);
+                pending_finished_folders.extend(delta.finished_folders);
+                pending_entries.extend(delta.entries);
+                scanned_folders = delta.scanned_folders;
+                total_results = delta.total_results;
+
+                let folder_updates =
+                    pending_started_folders.len() + pending_finished_folders.len();
+                let should_flush = pending_entries.len() >= MAX_PROGRESS_ENTRIES_PER_EVENT
+                    || folder_updates >= MAX_PROGRESS_ENTRIES_PER_EVENT
+                    || last_flush.elapsed() >= flush_interval;
+
+                if should_flush {
+                    emit_progress_chunked(
+                        &on_event,
+                        &mut pending_started_folders,
+                        &mut pending_finished_folders,
+                        &mut pending_entries,
+                        scanned_folders,
+                        total_results,
+                    )?;
+                    last_flush = Instant::now();
+                }
+            }
+            Ok(ProgressQueueMessage::Complete {
+                scanned_folders: completed_scanned,
+                total_results: completed_total,
+                truncated,
+            }) => {
+                scanned_folders = completed_scanned;
+                total_results = completed_total;
+
+                if !pending_started_folders.is_empty()
+                    || !pending_finished_folders.is_empty()
+                    || !pending_entries.is_empty()
+                {
+                    emit_progress_chunked(
+                        &on_event,
+                        &mut pending_started_folders,
+                        &mut pending_finished_folders,
+                        &mut pending_entries,
+                        scanned_folders,
+                        total_results,
+                    )?;
+                }
+
+                on_event
+                    .send(SearchStreamEvent::Completed {
+                        scanned_folders,
+                        total_results,
+                        truncated,
+                    })
+                    .map_err(|e| e.to_string())?;
+
+                return Ok(());
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if !pending_started_folders.is_empty()
+                    || !pending_finished_folders.is_empty()
+                    || !pending_entries.is_empty()
+                {
+                    emit_progress_chunked(
+                        &on_event,
+                        &mut pending_started_folders,
+                        &mut pending_finished_folders,
+                        &mut pending_entries,
+                        scanned_folders,
+                        total_results,
+                    )?;
+                    last_flush = Instant::now();
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                if !pending_started_folders.is_empty()
+                    || !pending_finished_folders.is_empty()
+                    || !pending_entries.is_empty()
+                {
+                    emit_progress_chunked(
+                        &on_event,
+                        &mut pending_started_folders,
+                        &mut pending_finished_folders,
+                        &mut pending_entries,
+                        scanned_folders,
+                        total_results,
+                    )?;
+                }
+
+                return Ok(());
+            }
+        }
+    }
+}
+
 #[tauri::command]
 pub fn cancel_search(run_id: Option<u64>) -> Result<(), String> {
     let target_run = run_id.unwrap_or_else(|| ACTIVE_SEARCH_RUN_ID.load(Ordering::Acquire));
@@ -185,7 +314,6 @@ pub async fn search_streaming(
 ) -> Result<(), String> {
     let cap = limit.unwrap_or(10_000).clamp(1, 10_000);
     let (workers, batch_size) = scheduler_tuning(roots.len());
-    let debounce = Duration::from_millis(CHANNEL_EMIT_INTERVAL_MS);
     let run_id = resolve_run_id(run_id);
 
     mark_run_started(run_id);
@@ -198,7 +326,6 @@ pub async fn search_streaming(
             cap,
             workers,
             batch_size,
-            debounce,
             true,
             false,
             on_event,
@@ -225,7 +352,6 @@ pub async fn search_with_progress(
 ) -> Result<Vec<FileEntry>, String> {
     let cap = limit.unwrap_or(10_000).clamp(1, 10_000);
     let (workers, batch_size) = scheduler_tuning(roots.len());
-    let debounce = Duration::from_millis(CHANNEL_EMIT_INTERVAL_MS);
     let run_id = resolve_run_id(run_id);
 
     mark_run_started(run_id);
@@ -238,7 +364,6 @@ pub async fn search_with_progress(
             cap,
             workers,
             batch_size,
-            debounce,
             false,
             true,
             on_event,
@@ -258,7 +383,6 @@ fn run_walkdir_search(
     cap: usize,
     workers: usize,
     batch_size: usize,
-    debounce: Duration,
     emit_entries_in_progress: bool,
     collect_final_entries: bool,
     on_event: Channel<SearchStreamEvent>,
@@ -294,12 +418,14 @@ fn run_walkdir_search(
 
     let mut scanned_folders = 0usize;
     let mut total_results = 0usize;
-    let mut pending_started_folders: Vec<String> = Vec::new();
-    let mut pending_finished_folders: Vec<String> = Vec::new();
-    let mut pending_entries: Vec<FileEntry> = Vec::new();
     let mut final_entries: Vec<FileEntry> = Vec::new();
-    let mut last_emit = Instant::now();
     let mut cancelled = false;
+
+    let (progress_tx, progress_rx) = mpsc::channel::<ProgressQueueMessage>();
+    let flush_interval = Duration::from_millis(CHANNEL_EMIT_INTERVAL_MS);
+    let flusher_handle = thread::spawn(move || {
+        run_progress_flusher(on_event, progress_rx, flush_interval)
+    });
 
     while !queue.is_empty() {
         if total_results >= cap {
@@ -323,9 +449,13 @@ fn run_walkdir_search(
             continue;
         }
 
+        let mut round_started_folders: Vec<String> = Vec::new();
+        let mut round_finished_folders: Vec<String> = Vec::new();
+        let mut round_entries: Vec<FileEntry> = Vec::new();
+
         for state in &mut round_states {
             if !state.started {
-                pending_started_folders.push(state.path.to_string_lossy().to_string());
+                round_started_folders.push(state.path.to_string_lossy().to_string());
                 state.started = true;
             }
         }
@@ -361,10 +491,10 @@ fn run_walkdir_search(
                 total_results += chunk.entries.len();
 
                 if emit_entries_in_progress && !collect_final_entries {
-                    pending_entries.append(&mut chunk.entries);
+                    round_entries.append(&mut chunk.entries);
                 } else {
                     if emit_entries_in_progress {
-                        pending_entries.extend(chunk.entries.iter().cloned());
+                        round_entries.extend(chunk.entries.iter().cloned());
                     }
                     if collect_final_entries {
                         final_entries.extend(chunk.entries);
@@ -374,7 +504,7 @@ fn run_walkdir_search(
 
             if chunk.exhausted {
                 scanned_folders += 1;
-                pending_finished_folders.push(state.path.to_string_lossy().to_string());
+                round_finished_folders.push(state.path.to_string_lossy().to_string());
 
                 for subfolder in state.buffered_subfolders {
                     if seen_folders.insert(subfolder.clone()) {
@@ -385,45 +515,35 @@ fn run_walkdir_search(
                 queue.push_back(state);
             }
         }
-
-        if last_emit.elapsed() >= debounce
-            || pending_entries.len() >= MAX_PROGRESS_ENTRIES_PER_EVENT
+        if !round_started_folders.is_empty()
+            || !round_finished_folders.is_empty()
+            || !round_entries.is_empty()
         {
-            emit_progress_chunked(
-                &on_event,
-                &mut pending_started_folders,
-                &mut pending_finished_folders,
-                &mut pending_entries,
-                scanned_folders,
-                total_results,
-            )?;
-            last_emit = Instant::now();
+            progress_tx
+                .send(ProgressQueueMessage::Delta(ProgressQueuePayload {
+                    started_folders: round_started_folders,
+                    finished_folders: round_finished_folders,
+                    entries: round_entries,
+                    scanned_folders,
+                    total_results,
+                }))
+                .map_err(|e| e.to_string())?;
         }
-    }
-
-    if !pending_started_folders.is_empty()
-        || !pending_finished_folders.is_empty()
-        || !pending_entries.is_empty()
-    {
-        emit_progress_chunked(
-            &on_event,
-            &mut pending_started_folders,
-            &mut pending_finished_folders,
-            &mut pending_entries,
-            scanned_folders,
-            total_results,
-        )?;
     }
 
     let truncated = !cancelled && total_results >= cap && !queue.is_empty();
 
-    on_event
-        .send(SearchStreamEvent::Completed {
+    progress_tx
+        .send(ProgressQueueMessage::Complete {
             scanned_folders,
             total_results,
             truncated,
         })
         .map_err(|e| e.to_string())?;
+
+    flusher_handle
+        .join()
+        .map_err(|_| "Progress flusher thread panicked".to_string())??;
 
     Ok(final_entries)
 }

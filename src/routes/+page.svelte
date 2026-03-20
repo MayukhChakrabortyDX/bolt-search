@@ -1,11 +1,12 @@
 <script lang="ts">
     import { Channel, invoke } from "@tauri-apps/api/core";
     import { open, save as saveDialog } from "@tauri-apps/plugin-dialog";
-    import { fade } from "svelte/transition";
     import { onMount } from "svelte";
+    import { fade } from "svelte/transition";
     import ChipSelect, {
         type ChipSelectOption,
     } from "../lib/components/ChipSelect.svelte";
+    import CalendarField from "../lib/components/CalendarField.svelte";
     import { FilterModel, type Filter, type FilterType } from "./filter.svelte";
     import {
         AlertTriangle,
@@ -17,7 +18,6 @@
         FolderOpen,
         HardDrive,
         LoaderCircle,
-        Plus,
         Search,
         Trash2,
         X,
@@ -120,6 +120,32 @@
         active: boolean;
     };
 
+    type SearchScopeMode = "all" | "drive" | "folder";
+    type SearchKind = "any" | "file" | "folder";
+
+    type SearchFormState = {
+        query: string;
+        extensionInput: string;
+        pathContainsInput: string;
+        pathPrefix: string;
+        scopeMode: SearchScopeMode;
+        scopeDrive: string;
+        scopeFolders: string[];
+        kind: SearchKind;
+        includeHidden: boolean;
+        readonlyOnly: boolean;
+        sizeMin: string;
+        sizeMinUnit: string;
+        sizeMax: string;
+        sizeMaxUnit: string;
+        modifiedFrom: string;
+        modifiedTo: string;
+        createdFrom: string;
+        createdTo: string;
+    };
+
+    type ValidationIssue = { message: string };
+
     const MAX_RESULTS = 10_000;
     const WORKER_UI_DEBOUNCE_MS = 50;
     const SIZE_UNIT_OPTIONS: ChipSelectOption[] = [
@@ -128,11 +154,99 @@
         { value: "MB", label: "MB" },
         { value: "GB", label: "GB" },
     ];
+    const POPULAR_EXTENSION_OPTIONS = [
+        { value: ".pdf", label: "PDF" },
+        { value: ".docx", label: "DOCX" },
+        { value: ".xlsx", label: "XLSX" },
+        { value: ".pptx", label: "PPTX" },
+        { value: ".txt", label: "TXT" },
+        { value: ".zip", label: "ZIP" },
+        { value: ".jpg", label: "JPG" },
+        { value: ".png", label: "PNG" },
+        { value: ".mp4", label: "MP4" },
+        { value: ".mp3", label: "MP3" },
+        { value: ".js", label: "JS" },
+        { value: ".ts", label: "TS" },
+    ] as const;
+    const DIR_INDENT_CLASSES = [
+        "pl-2",
+        "pl-[26px]",
+        "pl-[44px]",
+        "pl-[62px]",
+        "pl-[80px]",
+        "pl-[98px]",
+        "pl-[116px]",
+        "pl-[134px]",
+        "pl-[152px]",
+        "pl-[170px]",
+        "pl-[188px]",
+        "pl-[206px]",
+        "pl-[224px]",
+    ] as const;
+    const FILE_INDENT_CLASSES = [
+        "pl-5",
+        "pl-[38px]",
+        "pl-[56px]",
+        "pl-[74px]",
+        "pl-[92px]",
+        "pl-[110px]",
+        "pl-[128px]",
+        "pl-[146px]",
+        "pl-[164px]",
+        "pl-[182px]",
+        "pl-[200px]",
+        "pl-[218px]",
+        "pl-[236px]",
+    ] as const;
 
-    const filterMeta = FilterModel.meta;
+    function createDefaultSearchForm(): SearchFormState {
+        return {
+            query: "",
+            extensionInput: "",
+            pathContainsInput: "",
+            pathPrefix: "",
+            scopeMode: "all",
+            scopeDrive: "ALL",
+            scopeFolders: [],
+            kind: "any",
+            includeHidden: false,
+            readonlyOnly: false,
+            sizeMin: "",
+            sizeMinUnit: "MB",
+            sizeMax: "",
+            sizeMaxUnit: "MB",
+            modifiedFrom: "",
+            modifiedTo: "",
+            createdFrom: "",
+            createdTo: "",
+        };
+    }
 
-    let filters = $state<Filter[]>([]);
-    let nextId = $state(0);
+    function resolvePreferredDrive(roots: string[]): string {
+        const normalizedPreferred = roots.find((root) => {
+            const normalized = root.trim().replace(/\//g, "\\").toUpperCase();
+            return normalized === "C:\\" || normalized === "C:";
+        });
+
+        if (normalizedPreferred) {
+            return normalizedPreferred;
+        }
+
+        return roots[0] ?? "C:\\";
+    }
+
+    function ensureDriveScopeSelection() {
+        const current = searchForm.scopeDrive.trim().toUpperCase();
+        if (current && current !== "ALL") {
+            return;
+        }
+
+        searchForm.scopeDrive = resolvePreferredDrive(availableRoots);
+    }
+
+    let searchForm = $state<SearchFormState>(createDefaultSearchForm());
+    let showAdvanced = $state(true);
+    let enforceFolderScopeValidation = $state(false);
     let results = $state<FileEntry[]>([]);
     let searching = $state(false);
     let searched = $state(false);
@@ -155,24 +269,23 @@
     const streamCompletionResolvers = new Map<number, () => void>();
     const driveCountAnimationCancels = new Map<string, () => void>();
 
-    const query = $derived(FilterModel.toQuery(filters));
-    const filterTypeOptions = $derived(
-        (Object.entries(filterMeta) as [FilterType, (typeof filterMeta)[FilterType]][])
-            .map(([value, meta]) => ({ value, label: meta.label })),
+    const searchFilters = $derived(formToFilters(searchForm));
+    const query = $derived(FilterModel.toQuery(searchFilters));
+    const selectedExtensionTokens = $derived(
+        parseExtensionTokens(searchForm.extensionInput),
     );
     const driveOptions = $derived([
         { value: "ALL", label: "Global (all drives)" },
         ...availableRoots.map((root) => ({ value: root, label: root })),
     ]);
 
-    // ── Contradiction analysis ────────────────────────────────────────────────
+    // ── Search form validation ────────────────────────────────────────────────
 
-    type Contradiction = { message: string; filters: number[] };
-
-    function analyzeContradictions(filters: Filter[]): Contradiction[] {
-        const contradictions: Contradiction[] = [];
-        const get = (type: FilterType) =>
-            filters.filter((f) => f.type === type);
+    function analyzeSearchForm(
+        form: SearchFormState,
+        options?: { enforceFolderScopeSelection?: boolean },
+    ): ValidationIssue[] {
+        const issues: ValidationIssue[] = [];
         const parseDate = (value: string): Date | null => {
             const trimmed = value.trim();
             if (!trimmed) {
@@ -194,89 +307,59 @@
             return n * (map[unit] ?? 1);
         };
 
-        const stackable: FilterType[] = FilterModel.stackableTypes;
-        const seen = new Map<FilterType, number[]>();
-        for (const f of filters) {
-            if (stackable.includes(f.type)) continue;
-            if (!seen.has(f.type)) seen.set(f.type, []);
-            seen.get(f.type)!.push(f.id);
-        }
-        for (const [type, ids] of seen) {
-            if (ids.length > 1) {
-                contradictions.push({
-                    message: `"${filterMeta[type].label}" is added more than once`,
-                    filters: ids,
+        if (form.scopeMode === "drive") {
+            const selectedDrive = form.scopeDrive.trim();
+            if (!selectedDrive || selectedDrive === "ALL") {
+                issues.push({
+                    message: "Choose a specific drive or switch scope to All drives",
                 });
             }
         }
 
-        const sizeGt = get("size_gt");
-        const sizeLt = get("size_lt");
-        if (sizeGt.length && sizeLt.length) {
-            const gtBytes = toBytes(sizeGt[0].value, sizeGt[0].unit);
-            const ltBytes = toBytes(sizeLt[0].value, sizeLt[0].unit);
+        if (
+            options?.enforceFolderScopeSelection &&
+            form.scopeMode === "folder" &&
+            form.scopeFolders.length === 0
+        ) {
+            issues.push({
+                message: "Folder scope requires at least one selected folder",
+            });
+        }
+
+        if (form.sizeMin.trim() && form.sizeMax.trim()) {
+            const gtBytes = toBytes(form.sizeMin, form.sizeMinUnit);
+            const ltBytes = toBytes(form.sizeMax, form.sizeMaxUnit);
             if (gtBytes !== -1 && ltBytes !== -1 && gtBytes >= ltBytes) {
-                contradictions.push({
-                    message: `Size greater than (${sizeGt[0].value}${sizeGt[0].unit}) must be less than size less than (${sizeLt[0].value}${sizeLt[0].unit})`,
-                    filters: [sizeGt[0].id, sizeLt[0].id],
+                issues.push({
+                    message: "Minimum size must be smaller than maximum size",
                 });
             }
         }
 
-        const check = (
-            afterType: FilterType,
-            beforeType: FilterType,
-            label: string,
-        ) => {
-            const after = get(afterType);
-            const before = get(beforeType);
-            if (after.length && before.length) {
-                const a = parseDate(after[0].value);
-                const b = parseDate(before[0].value);
+        const checkRange = (from: string, to: string, label: string) => {
+            if (from.trim() && to.trim()) {
+                const a = parseDate(from);
+                const b = parseDate(to);
                 if (a && b && a >= b) {
-                    contradictions.push({
-                        message: `"${label} after" must be earlier than "${label} before"`,
-                        filters: [after[0].id, before[0].id],
+                    issues.push({
+                        message: `${label} start date must be earlier than end date`,
                     });
                 }
             }
         };
 
-        const checkRange = (rangeType: FilterType, label: string) => {
-            const range = get(rangeType);
-            if (!range.length) {
-                return;
-            }
+        checkRange(form.modifiedFrom, form.modifiedTo, "Modified");
+        checkRange(form.createdFrom, form.createdTo, "Created");
 
-            const start = parseDate(range[0].value);
-            const end = parseDate(range[0].value2);
-            if (start && end && start > end) {
-                contradictions.push({
-                    message: `"${label}" start date must be earlier than or equal to end date`,
-                    filters: [range[0].id],
-                });
-            }
-        };
-
-        check("modified_after", "modified_before", "Modified");
-        check("created_after", "created_before", "Created");
-        checkRange("modified_range", "Range Modified");
-        checkRange("created_range", "Range Created");
-
-        const fileOnly = get("file_only");
-        const folderOnly = get("folder_only");
-        if (fileOnly.length && folderOnly.length) {
-            contradictions.push({
-                message: `"Files only" and "Folders only" cannot both be active`,
-                filters: [fileOnly[0].id, folderOnly[0].id],
-            });
-        }
-
-        return contradictions;
+        return issues;
     }
 
-    const contradictions = $derived(analyzeContradictions(filters));
-    const hasContradiction = $derived(contradictions.length > 0);
+    const validationIssues = $derived(
+        analyzeSearchForm(searchForm, {
+            enforceFolderScopeSelection: enforceFolderScopeValidation,
+        }),
+    );
+    const hasContradiction = $derived(validationIssues.length > 0);
 
     const activeScanningFolders = $derived(
         activeRunMode === "streaming"
@@ -368,6 +451,12 @@
         return `${minutes}m ${seconds}s`;
     }
 
+    function rowIndentClass(depth: number, kind: "dir" | "file"): string {
+        const classes = kind === "dir" ? DIR_INDENT_CLASSES : FILE_INDENT_CLASSES;
+        const index = Math.max(0, Math.min(depth, classes.length - 1));
+        return classes[index];
+    }
+
     onMount(() => {
         const onSave = () => {
             void saveFilter();
@@ -431,6 +520,9 @@
         void (async () => {
             try {
                 availableRoots = await invoke<string[]>("list_search_roots");
+                if (searchForm.scopeMode === "drive") {
+                    ensureDriveScopeSelection();
+                }
             } catch {
                 availableRoots = [];
             }
@@ -453,20 +545,54 @@
 
     // ── Actions ───────────────────────────────────────────────────────────────
 
-    function addFilter() {
-        filters.push(FilterModel.create(nextId++));
+    function parseMultiValueInput(value: string): string[] {
+        return value
+            .split(/[\n,;]+/)
+            .map((token) => token.trim())
+            .filter((token) => token.length > 0);
     }
 
-    function removeFilter(id: number) {
-        filters = filters.filter((f) => f.id !== id);
+    function normalizeExtension(value: string): string {
+        const trimmed = value.trim().toLowerCase();
+        if (!trimmed) return "";
+        return trimmed.startsWith(".") ? trimmed : `.${trimmed}`;
     }
 
-    function onFilterTypeChange(filter: Filter) {
-        FilterModel.applyTypeDefaults(filter);
+    function parseExtensionTokens(value: string): string[] {
+        const normalized = parseMultiValueInput(value)
+            .map((token) => normalizeExtension(token))
+            .filter((token) => token.length > 0);
+
+        return Array.from(new Set(normalized));
     }
 
-    function filterTileClass(type: FilterType): string {
-        return `filter-tile filter-${type.replaceAll("_", "-")}`;
+    function normalizeExtensionInput() {
+        searchForm.extensionInput = parseExtensionTokens(
+            searchForm.extensionInput,
+        ).join(", ");
+    }
+
+    function togglePopularExtension(rawValue: string) {
+        const extension = normalizeExtension(rawValue);
+        if (!extension) return;
+
+        const current = parseExtensionTokens(searchForm.extensionInput);
+        const next = current.includes(extension)
+            ? current.filter((item) => item !== extension)
+            : [...current, extension];
+
+        searchForm.extensionInput = next.join(", ");
+    }
+
+    function removeExtensionToken(valueToRemove: string) {
+        const extension = normalizeExtension(valueToRemove);
+        if (!extension) return;
+
+        searchForm.extensionInput = parseExtensionTokens(
+            searchForm.extensionInput,
+        )
+            .filter((item) => item !== extension)
+            .join(", ");
     }
 
     function parseSubfolderPaths(value: string): string[] {
@@ -490,25 +616,220 @@
         return unique;
     }
 
-    function encodeSubfolderPaths(paths: string[]): string {
-        return dedupePaths(paths).join("\n");
+    function toDateRangeFilter(
+        filters: Filter[],
+        id: number,
+        from: string,
+        to: string,
+        rangeType: Extract<FilterType, "modified_range" | "created_range">,
+        afterType: Extract<FilterType, "modified_after" | "created_after">,
+        beforeType: Extract<FilterType, "modified_before" | "created_before">,
+    ): number {
+        const hasFrom = from.trim().length > 0;
+        const hasTo = to.trim().length > 0;
+
+        if (hasFrom && hasTo) {
+            filters.push({
+                id,
+                type: rangeType,
+                value: from,
+                value2: to,
+            });
+            return id + 1;
+        }
+
+        if (hasFrom) {
+            filters.push({ id, type: afterType, value: from, value2: "" });
+            id += 1;
+        }
+
+        if (hasTo) {
+            filters.push({ id, type: beforeType, value: to, value2: "" });
+            id += 1;
+        }
+
+        return id;
     }
 
-    function subfolderPathsFor(filter: Filter): string[] {
-        return parseSubfolderPaths(filter.value);
-    }
+    function formToFilters(form: SearchFormState): Filter[] {
+        const built: Filter[] = [];
+        let id = 0;
 
-    function removeSubfolderPath(filter: Filter, pathToRemove: string) {
-        const remaining = subfolderPathsFor(filter).filter(
-            (p) => p !== pathToRemove,
+        const push = (
+            type: FilterType,
+            value = "",
+            value2 = "",
+            unit?: string,
+        ) => {
+            built.push({ id: id++, type, value, value2, unit });
+        };
+
+        const queryValue = form.query.trim();
+        if (queryValue) {
+            push("name_contains", queryValue);
+        }
+
+        for (const extension of parseExtensionTokens(form.extensionInput)) {
+            push("extension", extension);
+        }
+
+        for (const fragment of parseMultiValueInput(form.pathContainsInput)) {
+            push("path_contains", fragment);
+        }
+
+        const pathPrefix = form.pathPrefix.trim();
+        if (pathPrefix) {
+            push("path_prefix", pathPrefix);
+        }
+
+        if (form.scopeMode === "drive") {
+            push("drive", form.scopeDrive || "ALL");
+        } else {
+            push("drive", "ALL");
+        }
+
+        if (form.scopeMode === "folder" && form.scopeFolders.length > 0) {
+            push("subfolder", dedupePaths(form.scopeFolders).join("\n"));
+        }
+
+        if (form.kind === "file") {
+            push("file_only");
+        } else if (form.kind === "folder") {
+            push("folder_only");
+        }
+
+        if (form.includeHidden) {
+            push("hidden");
+        }
+
+        if (form.readonlyOnly) {
+            push("readonly");
+        }
+
+        const minSize = form.sizeMin.trim();
+        if (minSize) {
+            push("size_gt", minSize, "", form.sizeMinUnit || "B");
+        }
+
+        const maxSize = form.sizeMax.trim();
+        if (maxSize) {
+            push("size_lt", maxSize, "", form.sizeMaxUnit || "B");
+        }
+
+        id = toDateRangeFilter(
+            built,
+            id,
+            form.modifiedFrom,
+            form.modifiedTo,
+            "modified_range",
+            "modified_after",
+            "modified_before",
         );
-        filter.value = encodeSubfolderPaths(remaining);
+
+        toDateRangeFilter(
+            built,
+            id,
+            form.createdFrom,
+            form.createdTo,
+            "created_range",
+            "created_after",
+            "created_before",
+        );
+
+        return built;
     }
 
-    async function pickSubfolder(filter: Filter) {
-        const driveFilter = filters.find((f) => f.type === "drive");
-        const selectedDrive = (driveFilter?.value ?? "").trim();
-        const selectedFolders = subfolderPathsFor(filter);
+    function formFromFilters(filters: Filter[]): SearchFormState {
+        const next = createDefaultSearchForm();
+        const getFirst = (type: FilterType) =>
+            filters.find((filter) => filter.type === type);
+        const getMany = (type: FilterType) =>
+            filters.filter((filter) => filter.type === type);
+
+        next.query = getFirst("name_contains")?.value ?? "";
+        next.extensionInput = getMany("extension")
+            .map((filter) => filter.value)
+            .join(", ");
+        next.extensionInput = parseExtensionTokens(next.extensionInput)
+            .join(", ");
+        next.pathContainsInput = getMany("path_contains")
+            .map((filter) => filter.value.trim())
+            .filter((value) => value.length > 0)
+            .join(", ");
+        next.pathPrefix = getFirst("path_prefix")?.value ?? "";
+
+        const drive = (getFirst("drive")?.value ?? "ALL").trim();
+        if (drive && drive !== "ALL") {
+            next.scopeMode = "drive";
+            next.scopeDrive = drive;
+        }
+
+        const folderPaths = dedupePaths(
+            getMany("subfolder").flatMap((filter) =>
+                parseSubfolderPaths(filter.value),
+            ),
+        );
+        if (folderPaths.length > 0) {
+            next.scopeMode = "folder";
+            next.scopeFolders = folderPaths;
+        }
+
+        if (getMany("file_only").length > 0) {
+            next.kind = "file";
+        } else if (getMany("folder_only").length > 0) {
+            next.kind = "folder";
+        }
+
+        next.includeHidden = getMany("hidden").length > 0;
+        next.readonlyOnly = getMany("readonly").length > 0;
+
+        const sizeMin = getFirst("size_gt");
+        if (sizeMin) {
+            next.sizeMin = sizeMin.value;
+            next.sizeMinUnit = sizeMin.unit ?? "B";
+        }
+
+        const sizeMax = getFirst("size_lt");
+        if (sizeMax) {
+            next.sizeMax = sizeMax.value;
+            next.sizeMaxUnit = sizeMax.unit ?? "B";
+        }
+
+        const modifiedRange = getFirst("modified_range");
+        if (modifiedRange) {
+            next.modifiedFrom = modifiedRange.value;
+            next.modifiedTo = modifiedRange.value2;
+        } else {
+            next.modifiedFrom = getFirst("modified_after")?.value ?? "";
+            next.modifiedTo = getFirst("modified_before")?.value ?? "";
+        }
+
+        const createdRange = getFirst("created_range");
+        if (createdRange) {
+            next.createdFrom = createdRange.value;
+            next.createdTo = createdRange.value2;
+        } else {
+            next.createdFrom = getFirst("created_after")?.value ?? "";
+            next.createdTo = getFirst("created_before")?.value ?? "";
+        }
+
+        return next;
+    }
+
+    function removeScopeFolder(pathToRemove: string) {
+        searchForm.scopeFolders = searchForm.scopeFolders.filter(
+            (path) => path !== pathToRemove,
+        );
+    }
+
+    function resetSearchForm() {
+        searchForm = createDefaultSearchForm();
+        enforceFolderScopeValidation = false;
+    }
+
+    async function pickScopeFolders() {
+        const selectedDrive = searchForm.scopeDrive.trim();
+        const selectedFolders = searchForm.scopeFolders;
         const defaultPath =
             selectedFolders[0] ||
             (selectedDrive && selectedDrive !== "ALL"
@@ -523,15 +844,17 @@
             });
 
             if (Array.isArray(selected)) {
-                filter.value = encodeSubfolderPaths([
+                searchForm.scopeFolders = dedupePaths([
                     ...selectedFolders,
                     ...selected,
                 ]);
+                searchForm.scopeMode = "folder";
             } else if (typeof selected === "string") {
-                filter.value = encodeSubfolderPaths([
+                searchForm.scopeFolders = dedupePaths([
                     ...selectedFolders,
                     selected,
                 ]);
+                searchForm.scopeMode = "folder";
             }
         } catch (e) {
             console.error("Folder selection failed:", e);
@@ -963,7 +1286,17 @@
     }
 
     async function search() {
-        if (hasContradiction || searching) return;
+        if (searching) return;
+
+        enforceFolderScopeValidation = true;
+        const submitIssues = analyzeSearchForm(searchForm, {
+            enforceFolderScopeSelection: true,
+        });
+        if (submitIssues.length > 0) {
+            searchStatus = submitIssues[0].message;
+            return;
+        }
+
         startSearchTimer();
         const runId = activeRunId + 1;
         activeRunId = runId;
@@ -988,13 +1321,14 @@
                 return;
             }
 
-            const driveFilter = filters.find((f) => f.type === "drive");
-            const selectedDrive = (driveFilter?.value ?? "ALL").trim();
-            const selectedSubfolders = dedupePaths(
-                filters
-                    .filter((f) => f.type === "subfolder")
-                    .flatMap((f) => parseSubfolderPaths(f.value)),
-            );
+            const selectedDrive =
+                searchForm.scopeMode === "drive"
+                    ? searchForm.scopeDrive.trim()
+                    : "ALL";
+            const selectedSubfolders =
+                searchForm.scopeMode === "folder"
+                    ? dedupePaths(searchForm.scopeFolders)
+                    : [];
 
             const rootsToScan =
                 selectedSubfolders.length > 0
@@ -1138,7 +1472,7 @@
             }
 
             const payload = JSON.stringify(
-                FilterModel.toSavedFile(filters),
+                FilterModel.toSavedFile(searchFilters),
                 null,
                 2,
             );
@@ -1146,7 +1480,7 @@
                 path: selectedPath,
                 content: payload,
             });
-            searchStatus = `Filter saved: ${selectedPath}`;
+            searchStatus = `Search profile saved: ${selectedPath}`;
         } catch (e) {
             console.error("Save filter failed:", e);
             searchStatus = "Save filter failed";
@@ -1174,51 +1508,35 @@
             const saved = FilterModel.parseSavedFile(content);
             const loadedFilters = FilterModel.fromSavedFile(saved, 0);
 
-            filters = loadedFilters;
-            nextId = loadedFilters.length;
+            searchForm = formFromFilters(loadedFilters);
             clearSearchResults();
-            searchStatus = `Filter loaded: ${selectedPath}`;
+            searchStatus = `Search profile loaded: ${selectedPath}`;
         } catch (e) {
             console.error("Load filter failed:", e);
             searchStatus = "Load filter failed";
         }
     }
 
-    function formatSize(bytes: number): string {
-        if (bytes === 0) return "0 B";
-        if (bytes < 1024) return `${bytes} B`;
-        if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
-        if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
-        return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
-    }
 </script>
 
-<div class="w-full h-full flex">
+<div class="w-full h-full flex flex-row">
     <!-- Sidebar -->
     <div
-        class="sidebar-panel w-75 h-full bg-zinc-100 border-r border-zinc-300 flex flex-col p-4 gap-3"
+        class="sidebar-panel w-[360px] min-w-[320px] h-full bg-zinc-50 border-r border-zinc-200 dark:bg-zinc-950 dark:border-zinc-800 flex flex-col p-4 gap-3"
     >
         <span
-            class="text-xs font-semibold text-zinc-400 uppercase tracking-widest"
-            >Filter Panel</span
+            class="text-xs font-semibold text-zinc-400 dark:text-zinc-500 uppercase tracking-widest"
+            >Search Builder</span
         >
 
-        <div class="grid grid-cols-3 gap-2">
+        <div class="grid grid-cols-2 gap-2">
             <button
-                class="py-2 text-[11px] rounded-md border border-zinc-300 bg-white hover:bg-zinc-50 text-zinc-600 flex items-center justify-center gap-1"
-                onclick={addFilter}
-            >
-                <Plus size={13} strokeWidth={2} />
-                Add
-            </button>
-
-            <button
-                class="py-2 text-[11px] rounded-md font-medium transition-colors text-white flex items-center justify-center gap-1
+                class="col-span-2 py-2 text-[11px] rounded-md font-medium transition-colors text-white flex items-center justify-center gap-1
                     {searching
                     ? 'bg-red-600 hover:bg-red-700'
                     : hasContradiction
                       ? 'bg-red-500 hover:bg-red-600'
-                      : 'bg-zinc-800 hover:bg-zinc-700'}"
+                                            : 'bg-teal-700 hover:bg-teal-600'}"
                 onclick={searching ? stopSearch : search}
                 disabled={!searching && hasContradiction}
             >
@@ -1235,183 +1553,357 @@
             </button>
 
             <button
-                class="py-2 text-[11px] rounded-md border border-zinc-300 bg-white hover:bg-zinc-50 text-zinc-600 flex items-center justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                class="py-2 text-[11px] rounded-md border border-zinc-300 bg-white hover:bg-zinc-50 text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800 dark:hover:bg-zinc-700 dark:text-zinc-300 flex items-center justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
                 onclick={clearSearchResults}
                 disabled={searching || (!searched && results.length === 0)}
             >
                 <Trash2 size={13} strokeWidth={2} />
-                Clear
+                Clear Results
+            </button>
+
+            <button
+                class="py-2 text-[11px] rounded-md border border-zinc-300 bg-white hover:bg-zinc-50 text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800 dark:hover:bg-zinc-700 dark:text-zinc-300 flex items-center justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                onclick={resetSearchForm}
+                disabled={searching}
+            >
+                <X size={13} strokeWidth={2} />
+                Reset Form
             </button>
         </div>
 
-        <!-- Filter tokens -->
-        <div class="flex flex-col gap-2 flex-1 overflow-y-auto">
-            {#if filters.length === 0}
-                <p class="text-xs text-zinc-400 text-center mt-16">
-                    Add filters to show here
-                </p>
-            {/if}
+        <div class="sidebar-scroll flex flex-1 flex-col gap-3 overflow-y-auto pr-1">
+            <section class="flex flex-col gap-2 rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 p-3">
+                <label class="text-[11px] font-bold uppercase tracking-[0.05em] text-zinc-500 dark:text-zinc-400" for="query-input">
+                    Name Contains
+                </label>
+                <input
+                    id="query-input"
+                    type="text"
+                    class="h-[30px] w-full rounded-md border border-zinc-300 bg-white px-2 text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:placeholder:text-zinc-500 transition-colors focus:border-zinc-500 focus:ring-1 focus:ring-zinc-200/80 dark:focus:ring-zinc-700/60 focus:outline-none"
+                    placeholder="invoice, notes, report"
+                    bind:value={searchForm.query}
+                />
+            </section>
 
-            {#each filters as filter (filter.id)}
-                <div class={filterTileClass(filter.type)}>
-                    <div class="filter-tile-head">
-                        <span class="filter-chip">
-                            <span class="filter-chip-dot"></span>
-                            {filterMeta[filter.type].label}
-                        </span>
-                        <button
-                            class="filter-remove-btn"
-                            onclick={() => removeFilter(filter.id)}
-                            aria-label="Remove filter"
-                        >
-                            <X size={12} strokeWidth={2} />
-                        </button>
-                    </div>
-
-                    <div class="filter-type-row">
-                        <ChipSelect
-                            containerClass="chip-filter-select filter-type-select"
-                            ariaLabel="Filter type"
-                            bind:value={filter.type}
-                            options={filterTypeOptions}
-                            onChange={() => onFilterTypeChange(filter)}
-                        />
-                    </div>
-
-                    {#if filterMeta[filter.type].hasValue}
-                        {#if filter.type === "drive"}
-                            <ChipSelect
-                                containerClass="chip-filter-select"
-                                ariaLabel="Drive scope"
-                                bind:value={filter.value}
-                                options={driveOptions}
-                            />
-                        {:else if filter.type === "subfolder"}
-                            <div class="flex flex-col gap-1 w-full">
-                                <input
-                                    type="text"
-                                    class="filter-field"
-                                    value={subfolderPathsFor(filter).join(
-                                        " | ",
-                                    ) || "No folder selected"}
-                                    placeholder="Select folder(s)"
-                                    disabled
-                                />
-                                <div class="flex gap-1">
-                                    <button
-                                        type="button"
-                                        class="filter-action-btn h-7 flex-1"
-                                        onclick={() => pickSubfolder(filter)}
-                                        aria-label="Browse for folders"
-                                        title="Browse"
-                                    >
-                                        <FolderOpen size={13} strokeWidth={2} />
-                                        Browse
-                                    </button>
-                                    <button
-                                        type="button"
-                                        class="filter-action-btn h-7 w-7 text-zinc-500"
-                                        onclick={() => {
-                                            filter.value = "";
-                                        }}
-                                        aria-label="Clear selected folders"
-                                        title="Clear"
-                                    >
-                                        <X size={12} strokeWidth={2} />
-                                    </button>
-                                </div>
-
-                                {#if subfolderPathsFor(filter).length > 0}
-                                    <div
-                                        class="max-h-24 overflow-auto border border-zinc-200 rounded-md bg-zinc-50"
-                                    >
-                                        {#each subfolderPathsFor(filter) as folderPath}
-                                            <div
-                                                class="px-2 py-1 text-[11px] text-zinc-600 border-b border-zinc-200 last:border-b-0 flex items-start justify-between gap-2"
-                                            >
-                                                <span
-                                                    class="break-all leading-snug"
-                                                    >{displayPath(
-                                                        folderPath,
-                                                    )}</span
-                                                >
-                                                <button
-                                                    type="button"
-                                                    class="text-zinc-400 hover:text-red-500 shrink-0"
-                                                    onclick={() =>
-                                                        removeSubfolderPath(
-                                                            filter,
-                                                            folderPath,
-                                                        )}
-                                                    aria-label="Remove selected folder"
-                                                >
-                                                    <X
-                                                        size={11}
-                                                        strokeWidth={2}
-                                                    />
-                                                </button>
-                                            </div>
-                                        {/each}
-                                    </div>
-                                {/if}
-                            </div>
-                        {:else if filter.type.endsWith("_range")}
-                            <div class="flex gap-1 w-full">
-                                <input
-                                    type="date"
-                                    class="filter-field"
-                                    bind:value={filter.value}
-                                    title="Start date"
-                                />
-                                <input
-                                    type="date"
-                                    class="filter-field"
-                                    bind:value={filter.value2}
-                                    title="End date"
-                                />
-                            </div>
-                        {:else if filter.type.includes("modified") || filter.type.includes("created")}
-                            <input
-                                type="date"
-                                class="filter-field"
-                                bind:value={filter.value}
-                            />
-                        {:else if filterMeta[filter.type].isSize}
-                            <div class="flex gap-1 w-full">
-                                <input
-                                    type="number"
-                                    min="0"
-                                    class="filter-field"
-                                    style="width: calc(100% - 52px);"
-                                    placeholder="0"
-                                    bind:value={filter.value}
-                                />
-                                <ChipSelect
-                                    containerClass="chip-filter-select filter-unit-select"
-                                    ariaLabel="Size unit"
-                                    bind:value={filter.unit}
-                                    options={SIZE_UNIT_OPTIONS}
-                                />
-                            </div>
-                        {:else}
-                            <input
-                                type="text"
-                                class="filter-field"
-                                placeholder={filterMeta[filter.type]
-                                    .placeholder ?? "value..."}
-                                bind:value={filter.value}
-                            />
-                        {/if}
-                    {/if}
+            <section class="flex flex-col gap-2 rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 p-3">
+                <div class="flex items-center justify-between">
+                    <span class="text-[11px] font-bold uppercase tracking-[0.05em] text-zinc-500 dark:text-zinc-400">Scope</span>
                 </div>
-            {/each}
+
+                <div class="flex flex-wrap gap-1.5">
+                    <button
+                        type="button"
+                        class="rounded-full border px-2 py-1 text-[11px] font-semibold tracking-[0.01em] transition-colors {searchForm.scopeMode ===
+                        'all'
+                            ? 'border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900'
+                            : 'border-zinc-300 bg-white text-zinc-600 hover:bg-zinc-50 hover:text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100'}"
+                        onclick={() => {
+                            searchForm.scopeMode = "all";
+                        }}
+                    >
+                        All Drives
+                    </button>
+                    <button
+                        type="button"
+                        class="rounded-full border px-2 py-1 text-[11px] font-semibold tracking-[0.01em] transition-colors {searchForm.scopeMode ===
+                        'drive'
+                            ? 'border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900'
+                            : 'border-zinc-300 bg-white text-zinc-600 hover:bg-zinc-50 hover:text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100'}"
+                        onclick={() => {
+                            searchForm.scopeMode = "drive";
+                            ensureDriveScopeSelection();
+                        }}
+                    >
+                        One Drive
+                    </button>
+                    <button
+                        type="button"
+                        class="rounded-full border px-2 py-1 text-[11px] font-semibold tracking-[0.01em] transition-colors {searchForm.scopeMode ===
+                        'folder'
+                            ? 'border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900'
+                            : 'border-zinc-300 bg-white text-zinc-600 hover:bg-zinc-50 hover:text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100'}"
+                        onclick={() => {
+                            searchForm.scopeMode = "folder";
+                        }}
+                    >
+                        Folder
+                    </button>
+                </div>
+
+                {#if searchForm.scopeMode === "drive"}
+                    <ChipSelect
+                        containerClass="w-full"
+                        ariaLabel="Drive scope"
+                        bind:value={searchForm.scopeDrive}
+                        options={driveOptions}
+                    />
+                {/if}
+
+                {#if searchForm.scopeMode === "folder"}
+                    <div class="flex flex-col gap-2">
+                        <button
+                            type="button"
+                            class="inline-flex h-[30px] items-center justify-center gap-1 rounded-md border border-zinc-300 bg-white px-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                            onclick={pickScopeFolders}
+                            aria-label="Browse for folders"
+                        >
+                            <FolderOpen size={13} strokeWidth={2} />
+                            Browse folders
+                        </button>
+
+                        {#if searchForm.scopeFolders.length === 0}
+                            <p class="text-[11px] text-zinc-400 dark:text-zinc-500">
+                                No folders selected
+                            </p>
+                        {:else}
+                            <div class="max-h-32 overflow-auto rounded-md border border-zinc-300 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900">
+                                {#each searchForm.scopeFolders as folderPath}
+                                    <div class="flex items-start justify-between gap-2 border-b border-zinc-200 dark:border-zinc-800 px-2 py-1.5 last:border-b-0">
+                                        <span class="break-all text-[11px] text-zinc-500 dark:text-zinc-300"
+                                            >{displayPath(folderPath)}</span
+                                        >
+                                        <button
+                                            type="button"
+                                            class="inline-flex items-center justify-center text-zinc-400 dark:text-zinc-500 hover:text-red-500"
+                                            onclick={() =>
+                                                removeScopeFolder(folderPath)}
+                                            aria-label="Remove selected folder"
+                                        >
+                                            <X size={11} strokeWidth={2} />
+                                        </button>
+                                    </div>
+                                {/each}
+                            </div>
+                        {/if}
+                    </div>
+                {/if}
+            </section>
+
+            <section class="flex flex-col gap-2 rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 p-3">
+                <span class="text-[11px] font-bold uppercase tracking-[0.05em] text-zinc-500 dark:text-zinc-400">Type</span>
+                <div class="flex flex-wrap gap-1.5">
+                    <button
+                        type="button"
+                        class="rounded-full border px-2 py-1 text-[11px] font-semibold tracking-[0.01em] transition-colors {searchForm.kind ===
+                        'any'
+                            ? 'border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900'
+                            : 'border-zinc-300 bg-white text-zinc-600 hover:bg-zinc-50 hover:text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100'}"
+                        onclick={() => {
+                            searchForm.kind = "any";
+                        }}
+                    >
+                        Any
+                    </button>
+                    <button
+                        type="button"
+                        class="rounded-full border px-2 py-1 text-[11px] font-semibold tracking-[0.01em] transition-colors {searchForm.kind ===
+                        'file'
+                            ? 'border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900'
+                            : 'border-zinc-300 bg-white text-zinc-600 hover:bg-zinc-50 hover:text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100'}"
+                        onclick={() => {
+                            searchForm.kind = "file";
+                        }}
+                    >
+                        Files
+                    </button>
+                    <button
+                        type="button"
+                        class="rounded-full border px-2 py-1 text-[11px] font-semibold tracking-[0.01em] transition-colors {searchForm.kind ===
+                        'folder'
+                            ? 'border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900'
+                            : 'border-zinc-300 bg-white text-zinc-600 hover:bg-zinc-50 hover:text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100'}"
+                        onclick={() => {
+                            searchForm.kind = "folder";
+                        }}
+                    >
+                        Folders
+                    </button>
+                </div>
+
+                <div class="flex flex-wrap gap-1.5">
+                    <button
+                        type="button"
+                        aria-pressed={searchForm.includeHidden}
+                        class={`form-toggle ${searchForm.includeHidden ? "on" : ""}`}
+                        onclick={() => {
+                            searchForm.includeHidden = !searchForm.includeHidden;
+                        }}
+                    >
+                        <span
+                            class={`form-toggle-indicator ${searchForm.includeHidden ? "on" : ""}`}
+                        ></span>
+                        <span class="form-toggle-label">Hidden</span>
+                    </button>
+
+                    <button
+                        type="button"
+                        aria-pressed={searchForm.readonlyOnly}
+                        class={`form-toggle ${searchForm.readonlyOnly ? "on" : ""}`}
+                        onclick={() => {
+                            searchForm.readonlyOnly = !searchForm.readonlyOnly;
+                        }}
+                    >
+                        <span
+                            class={`form-toggle-indicator ${searchForm.readonlyOnly ? "on" : ""}`}
+                        ></span>
+                        <span class="form-toggle-label">Read only</span>
+                    </button>
+                </div>
+            </section>
+
+            <section class="flex flex-col gap-2 rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 p-3">
+                <button
+                    type="button"
+                    class="flex w-full items-center justify-between text-zinc-500 dark:text-zinc-300"
+                    onclick={() => {
+                        showAdvanced = !showAdvanced;
+                    }}
+                >
+                    <span class="text-xs font-semibold tracking-[0.02em] text-zinc-700 dark:text-zinc-200">Advanced</span>
+                    <ChevronDown
+                        size={14}
+                        strokeWidth={2}
+                        class={showAdvanced ? "" : "rotate-[-90deg]"}
+                    />
+                </button>
+
+                {#if showAdvanced}
+                    <div class="grid gap-2">
+                        <label class="text-[10px] font-semibold uppercase tracking-[0.07em] text-zinc-400 dark:text-zinc-500" for="ext-input">
+                            Extensions
+                        </label>
+                        <div class="flex flex-wrap gap-1.5">
+                            {#each POPULAR_EXTENSION_OPTIONS as option}
+                                <button
+                                    type="button"
+                                    class={`rounded-full border px-2 py-1 text-[10px] font-semibold tracking-[0.01em] transition-colors ${selectedExtensionTokens.includes(option.value)
+                                        ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                                        : "border-zinc-300 bg-white text-zinc-600 hover:bg-zinc-50 hover:text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"}`}
+                                    aria-pressed={selectedExtensionTokens.includes(
+                                        option.value,
+                                    )}
+                                    onclick={() =>
+                                        togglePopularExtension(option.value)}
+                                >
+                                    {option.label}
+                                </button>
+                            {/each}
+                        </div>
+                        <input
+                            id="ext-input"
+                            type="text"
+                            class="h-[30px] w-full rounded-md border border-zinc-300 bg-white px-2 text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:placeholder:text-zinc-500 transition-colors focus:border-zinc-500 focus:ring-1 focus:ring-zinc-200/80 dark:focus:ring-zinc-700/60 focus:outline-none"
+                            placeholder="Type custom extensions: rs, .svelte, toml"
+                            bind:value={searchForm.extensionInput}
+                            onblur={normalizeExtensionInput}
+                        />
+
+                        {#if selectedExtensionTokens.length > 0}
+                            <div class="flex flex-wrap gap-1">
+                                {#each selectedExtensionTokens as ext}
+                                    <button
+                                        type="button"
+                                        class="inline-flex items-center gap-1 rounded-full border border-zinc-300 bg-zinc-100 px-2 py-0.5 text-[11px] font-semibold text-zinc-700 transition-colors hover:bg-zinc-200 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                                        onclick={() => removeExtensionToken(ext)}
+                                        aria-label={`Remove extension ${ext}`}
+                                    >
+                                        {ext}
+                                        <X size={10} strokeWidth={2} />
+                                    </button>
+                                {/each}
+                            </div>
+                        {/if}
+
+                        <label class="text-[10px] font-semibold uppercase tracking-[0.07em] text-zinc-400 dark:text-zinc-500" for="path-contains-input">
+                            Path Contains
+                        </label>
+                        <input
+                            id="path-contains-input"
+                            type="text"
+                            class="h-[30px] w-full rounded-md border border-zinc-300 bg-white px-2 text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:placeholder:text-zinc-500 transition-colors focus:border-zinc-500 focus:ring-1 focus:ring-zinc-200/80 dark:focus:ring-zinc-700/60 focus:outline-none"
+                            placeholder="src, workspace, backup"
+                            bind:value={searchForm.pathContainsInput}
+                        />
+
+                        <label class="text-[10px] font-semibold uppercase tracking-[0.07em] text-zinc-400 dark:text-zinc-500" for="path-prefix-input">
+                            Path Prefix
+                        </label>
+                        <input
+                            id="path-prefix-input"
+                            type="text"
+                            class="h-[30px] w-full rounded-md border border-zinc-300 bg-white px-2 text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:placeholder:text-zinc-500 transition-colors focus:border-zinc-500 focus:ring-1 focus:ring-zinc-200/80 dark:focus:ring-zinc-700/60 focus:outline-none"
+                            placeholder="C:/Users/me/Projects"
+                            bind:value={searchForm.pathPrefix}
+                        />
+
+                        <span class="text-[10px] font-semibold uppercase tracking-[0.07em] text-zinc-400 dark:text-zinc-500">Size Range</span>
+                        <div class="grid grid-cols-[1fr_auto_1fr_auto] gap-1.5">
+                            <input
+                                type="number"
+                                min="0"
+                                class="h-[30px] w-full rounded-md border border-zinc-300 bg-white px-2 text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 transition-colors focus:border-zinc-500 focus:ring-1 focus:ring-zinc-200/80 dark:focus:ring-zinc-700/60 focus:outline-none"
+                                placeholder="Min"
+                                bind:value={searchForm.sizeMin}
+                            />
+                            <ChipSelect
+                                containerClass="w-[54px] shrink-0"
+                                ariaLabel="Minimum size unit"
+                                bind:value={searchForm.sizeMinUnit}
+                                options={SIZE_UNIT_OPTIONS}
+                            />
+                            <input
+                                type="number"
+                                min="0"
+                                class="h-[30px] w-full rounded-md border border-zinc-300 bg-white px-2 text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 transition-colors focus:border-zinc-500 focus:ring-1 focus:ring-zinc-200/80 dark:focus:ring-zinc-700/60 focus:outline-none"
+                                placeholder="Max"
+                                bind:value={searchForm.sizeMax}
+                            />
+                            <ChipSelect
+                                containerClass="w-[54px] shrink-0"
+                                ariaLabel="Maximum size unit"
+                                bind:value={searchForm.sizeMaxUnit}
+                                options={SIZE_UNIT_OPTIONS}
+                            />
+                        </div>
+
+                        <span class="text-[10px] font-semibold uppercase tracking-[0.07em] text-zinc-400 dark:text-zinc-500">Modified</span>
+                        <div class="grid grid-cols-2 gap-1.5">
+                            <CalendarField
+                                ariaLabel="Modified from"
+                                placeholder="From"
+                                bind:value={searchForm.modifiedFrom}
+                            />
+                            <CalendarField
+                                ariaLabel="Modified to"
+                                placeholder="To"
+                                bind:value={searchForm.modifiedTo}
+                            />
+                        </div>
+
+                        <span class="text-[10px] font-semibold uppercase tracking-[0.07em] text-zinc-400 dark:text-zinc-500">Created</span>
+                        <div class="grid grid-cols-2 gap-1.5">
+                            <CalendarField
+                                ariaLabel="Created from"
+                                placeholder="From"
+                                bind:value={searchForm.createdFrom}
+                            />
+                            <CalendarField
+                                ariaLabel="Created to"
+                                placeholder="To"
+                                bind:value={searchForm.createdTo}
+                            />
+                        </div>
+                    </div>
+                {/if}
+            </section>
         </div>
 
-        <!-- Contradiction messages -->
         {#if hasContradiction}
-            <div class="flex flex-col gap-1">
-                {#each contradictions as c}
-                    <p class="text-xs text-red-500 leading-snug">{c.message}</p>
+            <div class="flex flex-col gap-1 rounded-md border border-red-300 bg-red-50 dark:border-red-900 dark:bg-red-950/40 p-2">
+                {#each validationIssues as issue}
+                    <p class="text-xs text-red-600 dark:text-red-300 leading-snug">
+                        {issue.message}
+                    </p>
                 {/each}
             </div>
         {/if}
@@ -1419,12 +1911,12 @@
     </div>
 
     <!-- Main panel -->
-    <div class="h-full flex flex-col" style="width: calc(100% - 300px)">
+    <div class="h-full flex-1 min-w-0 flex flex-col">
         <!-- Header -->
-        <div class="border-b border-zinc-200 flex flex-col">
+        <div class="border-b border-zinc-200 dark:border-zinc-800 flex flex-col">
             {#if !searching && !searched}
                 <div class="px-3 py-2">
-                    <span class="text-xs text-zinc-400">
+                    <span class="text-xs text-zinc-400 dark:text-zinc-500">
                         {#if searching}
                             {searchStatus || "Searching..."}
                         {:else if searched}
@@ -1439,7 +1931,7 @@
             {/if}
             {#if searching || searched}
                 <div class="px-3 pt-2">
-                    <span class="text-xs text-zinc-400">
+                    <span class="text-xs text-zinc-400 dark:text-zinc-500">
                         {#if searching}
                             {searchStatus || "Searching..."}
                         {:else if searched}
@@ -1453,7 +1945,7 @@
                 </div>
                 <div class="px-3 pb-2 flex items-center justify-between gap-3">
                     <div class="flex items-center gap-3 min-w-0">
-                        <span class="text-xs text-zinc-500">
+                        <span class="text-xs text-zinc-500 dark:text-zinc-400">
                             Total scanned: {driveScanTotal} folder{driveScanTotal ===
                             1
                                 ? ""
@@ -1462,40 +1954,40 @@
                     </div>
 
                     <div
-                        class="ml-auto shrink-0 inline-flex items-center gap-1.5 rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-600"
+                        class="ml-auto shrink-0 inline-flex items-center gap-1.5 rounded-md border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300 px-2 py-1 text-xs text-zinc-600"
                         title={searching
                             ? "Elapsed search time"
                             : "Last search duration"}
                     >
-                        <Clock3 size={12} strokeWidth={2} class="text-zinc-500" />
-                        <span class="font-medium text-zinc-700 tabular-nums"
+                        <Clock3 size={12} strokeWidth={2} class="text-zinc-500 dark:text-zinc-400" />
+                        <span class="font-medium text-zinc-700 dark:text-zinc-100 tabular-nums"
                             >{searchDurationLabel || "--"}</span
                         >
                     </div>
                 </div>
 
                 <div
-                    class="flex w-full overflow-hidden border-t border-zinc-300 bg-zinc-300"
+                    class="flex w-full overflow-hidden border-t border-zinc-200 dark:border-zinc-800 bg-zinc-100/80 dark:bg-zinc-900"
                 >
                     {#each driveScanRows as row, i}
                         <div
                             class="h-8 flex-1 min-w-0 flex items-center justify-between px-6 text-[11px] {row.active
-                                ? 'bg-zinc-50'
-                                : 'bg-zinc-100'} {i < driveScanRows.length - 1
-                                ? 'border-r border-zinc-300'
+                                ? 'bg-zinc-50 dark:bg-zinc-900'
+                                : 'bg-zinc-100 dark:bg-zinc-800'} {i < driveScanRows.length - 1
+                                ? 'border-r border-zinc-200 dark:border-zinc-800'
                                 : ''}"
                         >
                             <div class="flex items-center gap-1 min-w-0">
                                 <HardDrive
                                     size={12}
-                                    class="text-zinc-500 shrink-0"
+                                    class="text-zinc-500 dark:text-zinc-400 shrink-0"
                                     strokeWidth={2}
                                 />
-                                <span class="text-zinc-600 font-medium truncate"
+                                <span class="text-zinc-600 dark:text-zinc-200 font-medium truncate"
                                     >{row.label}</span
                                 >
                             </div>
-                            <span class="text-zinc-500 whitespace-nowrap">
+                            <span class="text-zinc-500 dark:text-zinc-400 whitespace-nowrap">
                                 {row.active ? `${row.scanned} folders` : "-"}
                             </span>
                         </div>
@@ -1511,7 +2003,7 @@
                     class="flex items-center justify-center h-full"
                     transition:fade={{ duration: 180 }}
                 >
-                    <span class="text-sm text-zinc-400">No results yet.</span>
+                    <span class="text-sm text-zinc-400 dark:text-zinc-500">No results yet.</span>
                 </div>
             {:else if treeRows.length === 0}
                 <div
@@ -1519,32 +2011,30 @@
                     transition:fade={{ duration: 180 }}
                 >
                     <span
-                        class="text-sm text-zinc-400 {searching
+                        class="text-sm text-zinc-400 dark:text-zinc-500 {searching
                             ? 'animate-pulse'
                             : ''}"
                     >
                         {searching
                             ? "Searching..."
-                            : "No files matched your filters."}
+                            : "No files matched your criteria."}
                     </span>
                 </div>
             {:else}
                 <div
-                    class="h-full rounded-lg border border-zinc-200 bg-white overflow-auto"
+                    class="h-full rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 overflow-auto"
                     transition:fade={{ duration: 220 }}
                 >
                     {#each treeRows as row (row.node.path)}
                         {#if row.node.isDir}
                             <button
-                                class="w-full flex items-center gap-2 py-2 pr-3 text-left border-b border-zinc-100 hover:bg-zinc-50"
-                                style={`padding-left: ${8 + row.depth * 18}px;`}
+                                class="w-full flex items-center gap-2 py-2 pr-3 text-left border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/70 {rowIndentClass(row.depth, 'dir')}"
                                 onclick={() =>
                                     toggleDirectory(row.node.path, row.depth)}
                                 title={displayPath(row.node.path)}
                             >
                                 <span
-                                    class="text-xs text-zinc-500"
-                                    style="width: 12px; text-align: center;"
+                                    class="w-3 text-center text-xs text-zinc-500 dark:text-zinc-400"
                                 >
                                     {#if row.hasChildren}
                                         {#if row.isOpen}
@@ -1562,10 +2052,10 @@
                                 </span>
                                 <Folder
                                     size={14}
-                                    class="text-zinc-500"
+                                    class="text-zinc-500 dark:text-zinc-400"
                                     strokeWidth={2}
                                 />
-                                <span class="text-xs text-zinc-700 font-medium"
+                                <span class="text-xs text-zinc-700 dark:text-zinc-100 font-medium"
                                     >{row.node.name}</span
                                 >
                                 {#if isFolderScanning(row.node.path)}
@@ -1575,26 +2065,25 @@
                                         strokeWidth={2}
                                     />
                                 {/if}
-                                <span class="text-xs text-zinc-400 truncate"
+                                <span class="text-xs text-zinc-400 dark:text-zinc-500 truncate"
                                     >{displayPath(row.node.path)}</span
                                 >
                             </button>
                         {:else}
                             <button
-                                class="w-full flex items-center gap-2 py-2 pr-3 text-left border-b border-zinc-100 hover:bg-zinc-50"
-                                style={`padding-left: ${20 + row.depth * 18}px;`}
+                                class="w-full flex items-center gap-2 py-2 pr-3 text-left border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/70 {rowIndentClass(row.depth, 'file')}"
                                 onclick={() => openInExplorer(row.node.path)}
                                 title={displayPath(row.node.path)}
                             >
                                 <File
                                     size={14}
-                                    class="text-zinc-500"
+                                    class="text-zinc-500 dark:text-zinc-400"
                                     strokeWidth={2}
                                 />
-                                <span class="text-xs text-zinc-700 font-medium"
+                                <span class="text-xs text-zinc-700 dark:text-zinc-100 font-medium"
                                     >{row.node.name}</span
                                 >
-                                <span class="text-xs text-zinc-400 truncate"
+                                <span class="text-xs text-zinc-400 dark:text-zinc-500 truncate"
                                     >{displayPath(row.node.path)}</span
                                 >
                             </button>
@@ -1607,169 +2096,52 @@
 </div>
 
 <style>
-    .filter-tile {
-        --filter-h: 220;
-        --filter-s: 72%;
-        --filter-l: 44%;
-        --filter-accent: hsl(var(--filter-h) var(--filter-s) var(--filter-l));
-        --filter-control-height: 30px;
-        display: flex;
-        flex-direction: column;
+    .form-toggle {
+        display: inline-flex;
+        align-items: center;
         gap: 0.45rem;
-        padding: 0.65rem;
-        border-radius: 0.75rem;
-        border: 1px solid
-            color-mix(in srgb, var(--filter-accent) 45%, var(--control-border));
-        background:
-            linear-gradient(
-                160deg,
-                color-mix(in srgb, var(--filter-accent) 9%, var(--panel) 91%) 0%,
-                var(--panel) 62%
-            ),
-            var(--panel);
-    }
-
-    :global(html[data-theme="dark"]) .filter-tile {
-        --filter-l: 64%;
-        border-color: color-mix(in srgb, var(--filter-accent) 40%, #3c3c3c);
-        background:
-            linear-gradient(
-                160deg,
-                color-mix(in srgb, var(--filter-accent) 16%, #1f1f1f) 0%,
-                #1f1f1f 64%
-            ),
-            #1f1f1f;
-    }
-
-    .filter-tile-head {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 0.5rem;
-    }
-
-    .filter-chip {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.4rem;
-        font-size: 0.67rem;
-        font-weight: 700;
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
-        color: color-mix(in srgb, var(--filter-accent) 62%, var(--control-text));
-        background: color-mix(in srgb, var(--filter-accent) 12%, transparent);
-        border: 1px solid color-mix(in srgb, var(--filter-accent) 34%, transparent);
-        padding: 0.16rem 0.45rem;
         border-radius: 999px;
-        white-space: nowrap;
+        border: 1px solid var(--control-border);
+        background: var(--control-bg);
+        color: var(--control-text);
+        padding: 0.3rem 0.62rem;
+        font-size: 11px;
+        font-weight: 600;
+        transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
     }
 
-    .filter-chip-dot {
-        width: 0.42rem;
-        height: 0.42rem;
+    .form-toggle:hover {
+        background: var(--control-bg-hover);
+    }
+
+    .form-toggle.on {
+        border-color: color-mix(in srgb, var(--accent) 45%, var(--control-border));
+    }
+
+    .form-toggle-label {
+        letter-spacing: 0.01em;
+    }
+
+    .form-toggle-indicator {
+        width: 8px;
+        height: 8px;
         border-radius: 999px;
-        background: var(--filter-accent);
+        background: #71717a;
+        transition: background-color 0.15s ease, box-shadow 0.15s ease;
     }
 
-    .filter-type-row {
-        width: 100%;
+    .form-toggle-indicator.on {
+        background: var(--accent);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
     }
 
-    .filter-type-select {
-        width: 100%;
+    .sidebar-scroll {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
     }
 
-    .chip-filter-select {
-        width: 100%;
+    .sidebar-scroll::-webkit-scrollbar {
+        display: none;
     }
-
-    .filter-unit-select {
-        width: 48px;
-        flex-shrink: 0;
-    }
-
-    .filter-remove-btn {
-        width: 1.5rem;
-        height: 1.5rem;
-        border-radius: 0.45rem;
-        border: 1px solid color-mix(in srgb, var(--filter-accent) 28%, var(--control-border));
-        background: color-mix(in srgb, var(--panel) 90%, transparent);
-        color: color-mix(in srgb, var(--filter-accent) 45%, var(--control-muted));
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        transition:
-            background-color 0.15s ease,
-            color 0.15s ease,
-            border-color 0.15s ease;
-    }
-
-    .filter-remove-btn:hover {
-        color: #ef4444;
-        border-color: color-mix(in srgb, #ef4444 45%, var(--control-border));
-        background: color-mix(in srgb, #ef4444 14%, transparent);
-    }
-
-    .filter-field {
-        width: 100%;
-        height: var(--filter-control-height);
-        min-height: var(--filter-control-height);
-        font-size: 0.75rem;
-        padding: 0 0.55rem;
-        border-radius: 0.45rem;
-        border: 1px solid
-            color-mix(in srgb, var(--filter-accent) 18%, var(--control-border));
-        background: color-mix(in srgb, var(--panel) 86%, transparent);
-        color: var(--control-text);
-        transition:
-            border-color 0.15s ease,
-            background-color 0.15s ease;
-    }
-
-    .filter-field:focus {
-        outline: none;
-        border-color: color-mix(in srgb, var(--filter-accent) 50%, var(--focus-ring));
-    }
-
-    .filter-action-btn {
-        border-radius: 0.45rem;
-        border: 1px solid
-            color-mix(in srgb, var(--filter-accent) 20%, var(--control-border));
-        background: color-mix(in srgb, var(--panel) 90%, transparent);
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 0.25rem;
-        font-size: 0.72rem;
-        color: var(--control-text);
-        transition:
-            background-color 0.15s ease,
-            border-color 0.15s ease,
-            color 0.15s ease;
-    }
-
-    .filter-action-btn:hover {
-        background: color-mix(in srgb, var(--filter-accent) 14%, var(--control-bg-hover));
-        border-color: color-mix(in srgb, var(--filter-accent) 35%, var(--control-border));
-    }
-
-    .filter-extension { --filter-h: 220; }
-    .filter-name-contains { --filter-h: 174; }
-    .filter-path-contains { --filter-h: 196; }
-    .filter-path-prefix { --filter-h: 204; }
-    .filter-subfolder { --filter-h: 34; }
-    .filter-size-gt { --filter-h: 145; }
-    .filter-size-lt { --filter-h: 124; }
-    .filter-modified-after { --filter-h: 286; }
-    .filter-modified-before { --filter-h: 264; }
-    .filter-modified-range { --filter-h: 300; }
-    .filter-created-after { --filter-h: 340; }
-    .filter-created-before { --filter-h: 358; }
-    .filter-created-range { --filter-h: 15; }
-    .filter-drive { --filter-h: 48; }
-    .filter-hidden { --filter-h: 210; --filter-s: 22%; }
-    .filter-readonly { --filter-h: 200; --filter-s: 28%; }
-    .filter-file-only { --filter-h: 152; }
-    .filter-folder-only { --filter-h: 26; }
-
 </style>
+
