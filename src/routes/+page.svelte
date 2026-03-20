@@ -11,6 +11,7 @@
         AlertTriangle,
         ChevronDown,
         ChevronRight,
+        Clock3,
         File,
         Folder,
         FolderOpen,
@@ -146,7 +147,11 @@
     let streamTruncated = $state(false);
     let activeRunMode = $state<SearchRunMode>(null);
     let activeRunId = $state(0);
+    let searchStartedAtMs = $state<number | null>(null);
+    let searchElapsedMs = $state(0);
+    let lastSearchDurationMs = $state<number | null>(null);
     let streamWorker: Worker | null = null;
+    let searchTimerHandle: ReturnType<typeof setInterval> | null = null;
     const streamCompletionResolvers = new Map<number, () => void>();
     const driveCountAnimationCancels = new Map<string, () => void>();
 
@@ -308,6 +313,61 @@
         });
     });
 
+    const searchDurationLabel = $derived.by(() => {
+        if (searching) {
+            return formatDuration(searchElapsedMs);
+        }
+        if (lastSearchDurationMs !== null) {
+            return formatDuration(lastSearchDurationMs);
+        }
+        return "";
+    });
+
+    function clearSearchTimer() {
+        if (searchTimerHandle !== null) {
+            clearInterval(searchTimerHandle);
+            searchTimerHandle = null;
+        }
+    }
+
+    function startSearchTimer() {
+        clearSearchTimer();
+        searchStartedAtMs = Date.now();
+        searchElapsedMs = 0;
+        lastSearchDurationMs = null;
+
+        searchTimerHandle = setInterval(() => {
+            if (searchStartedAtMs !== null) {
+                searchElapsedMs = Date.now() - searchStartedAtMs;
+            }
+        }, 100);
+    }
+
+    function stopSearchTimer() {
+        if (searchStartedAtMs !== null) {
+            searchElapsedMs = Date.now() - searchStartedAtMs;
+            lastSearchDurationMs = searchElapsedMs;
+        }
+
+        searchStartedAtMs = null;
+        clearSearchTimer();
+    }
+
+    function formatDuration(ms: number): string {
+        if (ms < 1000) {
+            return `${ms} ms`;
+        }
+
+        const totalSeconds = ms / 1000;
+        if (totalSeconds < 60) {
+            return `${totalSeconds.toFixed(1)} s`;
+        }
+
+        const minutes = Math.floor(totalSeconds / 60);
+        const seconds = (totalSeconds % 60).toFixed(1).padStart(4, "0");
+        return `${minutes}m ${seconds}s`;
+    }
+
     onMount(() => {
         const onSave = () => {
             void saveFilter();
@@ -384,6 +444,7 @@
                 onStreamingModeChange,
             );
             stopDriveCountAnimations();
+            clearSearchTimer();
             streamWorker?.terminate();
             streamWorker = null;
             streamCompletionResolvers.clear();
@@ -903,6 +964,7 @@
 
     async function search() {
         if (hasContradiction || searching) return;
+        startSearchTimer();
         const runId = activeRunId + 1;
         activeRunId = runId;
         searching = true;
@@ -995,6 +1057,7 @@
             searchStatus = "Search failed";
         } finally {
             if (runId === activeRunId) {
+                stopSearchTimer();
                 searching = false;
                 activeRunMode = null;
             }
@@ -1007,6 +1070,7 @@
         const runIdToStop = activeRunId;
         activeRunId = runIdToStop + 1;
         activeRunMode = null;
+        stopSearchTimer();
         searching = false;
         scanningFolders = {};
         streamTruncated = false;
@@ -1387,17 +1451,27 @@
                         {/if}
                     </span>
                 </div>
-                <div class="px-3 pb-2">
-                    <span class="text-xs text-zinc-500">
-                        Total scanned: {driveScanTotal} folder{driveScanTotal ===
-                        1
-                            ? ""
-                            : "s"}
-                    </span>
+                <div class="px-3 pb-2 flex items-center justify-between gap-3">
+                    <div class="flex items-center gap-3 min-w-0">
+                        <span class="text-xs text-zinc-500">
+                            Total scanned: {driveScanTotal} folder{driveScanTotal ===
+                            1
+                                ? ""
+                                : "s"}
+                        </span>
+                    </div>
 
-                    <span class="text-xs text-zinc-500">
-                        Mode: {streamingEnabled ? "Streaming" : "Batch"}
-                    </span>
+                    <div
+                        class="ml-auto shrink-0 inline-flex items-center gap-1.5 rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-600"
+                        title={searching
+                            ? "Elapsed search time"
+                            : "Last search duration"}
+                    >
+                        <Clock3 size={12} strokeWidth={2} class="text-zinc-500" />
+                        <span class="font-medium text-zinc-700 tabular-nums"
+                            >{searchDurationLabel || "--"}</span
+                        >
+                    </div>
                 </div>
 
                 <div

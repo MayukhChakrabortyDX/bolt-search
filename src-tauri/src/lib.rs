@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
 use serde::{Deserialize, Serialize};
-use rayon::iter::ParallelBridge;
 use rayon::prelude::*;
 use walkdir::WalkDir;
 use chrono::NaiveDate;
@@ -412,6 +411,7 @@ fn prepare_filters(filters: &[Filter]) -> PreparedFilters {
     prepared
 }
 
+#[allow(dead_code)]
 fn entry_matches(path: &Path, metadata: &Metadata, filters: &PreparedFilters) -> bool {
     let is_dir = metadata.is_dir();
     let mut path_normalized_cache: Option<String> = None;
@@ -713,16 +713,22 @@ fn scan_folder_once(folder: &Path, filters: &PreparedFilters) -> FolderScanResul
         }
 
         let path = dir_entry.path();
+        let is_dir = file_type.is_dir();
+
+        if is_dir {
+            next_folders.push(path.to_string_lossy().to_string());
+        }
+
+        if !entry_matches_without_metadata(&path, is_dir, filters) {
+            continue;
+        }
+
         let metadata = match dir_entry.metadata() {
             Ok(m) => m,
             Err(_) => continue,
         };
 
-        if file_type.is_dir() {
-            next_folders.push(path.to_string_lossy().to_string());
-        }
-
-        if entry_matches(&path, &metadata, filters) {
+        if entry_matches_with_metadata(&metadata, filters) {
             entries.push(to_file_entry(&path, &metadata));
         }
     }
@@ -877,70 +883,54 @@ fn search_impl(query: SearchQuery, roots: Vec<PathBuf>, max_results: usize) -> V
     let per_root: Vec<Vec<FileEntry>> = roots
         .into_par_iter()
         .map(|root| {
-            let walk_iter = WalkDir::new(root)
+            let mut root_results = Vec::new();
+            let mut local_budget = 0usize;
+
+            for entry in WalkDir::new(root)
                 .follow_links(false)
                 .into_iter()
                 .filter_entry(|entry| {
                     !entry.file_type().is_dir()
                         || can_descend_into_dir(entry.path(), filters.as_ref())
-                });
+                })
+                .filter_map(|e| e.ok())
+            {
+                if remaining.load(Ordering::Acquire) == 0 && local_budget == 0 {
+                    break;
+                }
 
-            let root_state = walk_iter
-                .par_bridge()
-                .fold(
-                    || (Vec::new(), 0usize),
-                    |mut state, entry_result| {
-                        if remaining.load(Ordering::Acquire) == 0 {
-                            return state;
-                        }
+                let is_dir = entry.file_type().is_dir();
+                let path = entry.path();
 
-                        let entry = match entry_result {
-                            Ok(entry) => entry,
-                            Err(_) => return state,
-                        };
+                if !entry_matches_without_metadata(path, is_dir, filters.as_ref()) {
+                    continue;
+                }
 
-                        let is_dir = entry.file_type().is_dir();
-                        let path = entry.path();
+                let metadata = match entry.metadata() {
+                    Ok(meta) => meta,
+                    Err(_) => continue,
+                };
 
-                        if !entry_matches_without_metadata(path, is_dir, filters.as_ref()) {
-                            return state;
-                        }
+                if !entry_matches_with_metadata(&metadata, filters.as_ref()) {
+                    continue;
+                }
 
-                        let metadata = match entry.metadata() {
-                            Ok(meta) => meta,
-                            Err(_) => return state,
-                        };
+                if local_budget == 0 {
+                    local_budget = claim_result_budget(remaining.as_ref(), 32);
+                    if local_budget == 0 {
+                        break;
+                    }
+                }
 
-                        if !entry_matches_with_metadata(&metadata, filters.as_ref()) {
-                            return state;
-                        }
-
-                        if state.1 == 0 {
-                            state.1 = claim_result_budget(remaining.as_ref(), 32);
-                            if state.1 == 0 {
-                                return state;
-                            }
-                        }
-
-                        state.1 -= 1;
-                        state.0.push(to_file_entry(path, &metadata));
-                        state
-                    },
-                )
-                .reduce(
-                    || (Vec::new(), 0usize),
-                    |mut left, mut right| {
-                        left.0.append(&mut right.0);
-                        left.1 += right.1;
-                        left
-                    },
-                );
-
-            if root_state.1 > 0 {
-                remaining.fetch_add(root_state.1, Ordering::AcqRel);
+                local_budget -= 1;
+                root_results.push(to_file_entry(path, &metadata));
             }
 
-            root_state.0
+            if local_budget > 0 {
+                remaining.fetch_add(local_budget, Ordering::AcqRel);
+            }
+
+            root_results
         })
         .collect();
 

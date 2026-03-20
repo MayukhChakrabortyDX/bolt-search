@@ -10,16 +10,17 @@ use serde::Serialize;
 use tauri::ipc::Channel;
 
 use crate::{
-    entry_matches, get_thread_pool, prepare_filters, to_file_entry, FileEntry, PreparedFilters,
-    SearchQuery,
+    entry_matches_with_metadata, entry_matches_without_metadata, get_thread_pool,
+    prepare_filters, to_file_entry, FileEntry, PreparedFilters, SearchQuery,
 };
 
-const FOLDER_CONTEXT_SWITCH_ITEMS: usize = 100;
-const CHANNEL_EMIT_INTERVAL_MS: u64 = 200;
+const FOLDER_CONTEXT_SWITCH_ITEMS: usize = 64;
+const CHANNEL_EMIT_INTERVAL_MS: u64 = 120;
 const MIN_WORKERS: usize = 2;
 const MAX_WORKERS: usize = 16;
 const MIN_BATCH_SIZE: usize = 8;
-const MAX_BATCH_SIZE: usize = 128;
+const MAX_BATCH_SIZE: usize = 48;
+const MAX_PROGRESS_ENTRIES_PER_EVENT: usize = 256;
 
 static ACTIVE_SEARCH_RUN_ID: AtomicU64 = AtomicU64::new(0);
 static CANCEL_REQUEST_RUN_ID: AtomicU64 = AtomicU64::new(0);
@@ -77,6 +78,61 @@ pub enum SearchStreamEvent {
         total_results: usize,
         truncated: bool,
     },
+}
+
+fn emit_progress_chunked(
+    on_event: &Channel<SearchStreamEvent>,
+    pending_started_folders: &mut Vec<String>,
+    pending_finished_folders: &mut Vec<String>,
+    pending_entries: &mut Vec<FileEntry>,
+    scanned_folders: usize,
+    total_results: usize,
+) -> Result<(), String> {
+    let mut include_folder_updates = true;
+
+    while pending_entries.len() > MAX_PROGRESS_ENTRIES_PER_EVENT {
+        let entries_chunk: Vec<FileEntry> = pending_entries
+            .drain(..MAX_PROGRESS_ENTRIES_PER_EVENT)
+            .collect();
+
+        on_event
+            .send(SearchStreamEvent::Progress {
+                started_folders: if include_folder_updates {
+                    std::mem::take(pending_started_folders)
+                } else {
+                    Vec::new()
+                },
+                finished_folders: if include_folder_updates {
+                    std::mem::take(pending_finished_folders)
+                } else {
+                    Vec::new()
+                },
+                entries: entries_chunk,
+                scanned_folders,
+                total_results,
+            })
+            .map_err(|e| e.to_string())?;
+
+        include_folder_updates = false;
+    }
+
+    if include_folder_updates
+        || !pending_started_folders.is_empty()
+        || !pending_finished_folders.is_empty()
+        || !pending_entries.is_empty()
+    {
+        on_event
+            .send(SearchStreamEvent::Progress {
+                started_folders: std::mem::take(pending_started_folders),
+                finished_folders: std::mem::take(pending_finished_folders),
+                entries: std::mem::take(pending_entries),
+                scanned_folders,
+                total_results,
+            })
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -304,11 +360,15 @@ fn run_walkdir_search(
 
                 total_results += chunk.entries.len();
 
-                if emit_entries_in_progress {
-                    pending_entries.extend(chunk.entries.iter().cloned());
-                }
-                if collect_final_entries {
-                    final_entries.extend(chunk.entries);
+                if emit_entries_in_progress && !collect_final_entries {
+                    pending_entries.append(&mut chunk.entries);
+                } else {
+                    if emit_entries_in_progress {
+                        pending_entries.extend(chunk.entries.iter().cloned());
+                    }
+                    if collect_final_entries {
+                        final_entries.extend(chunk.entries);
+                    }
                 }
             }
 
@@ -326,16 +386,17 @@ fn run_walkdir_search(
             }
         }
 
-        if last_emit.elapsed() >= debounce {
-            on_event
-                .send(SearchStreamEvent::Progress {
-                    started_folders: std::mem::take(&mut pending_started_folders),
-                    finished_folders: std::mem::take(&mut pending_finished_folders),
-                    entries: std::mem::take(&mut pending_entries),
-                    scanned_folders,
-                    total_results,
-                })
-                .map_err(|e| e.to_string())?;
+        if last_emit.elapsed() >= debounce
+            || pending_entries.len() >= MAX_PROGRESS_ENTRIES_PER_EVENT
+        {
+            emit_progress_chunked(
+                &on_event,
+                &mut pending_started_folders,
+                &mut pending_finished_folders,
+                &mut pending_entries,
+                scanned_folders,
+                total_results,
+            )?;
             last_emit = Instant::now();
         }
     }
@@ -344,15 +405,14 @@ fn run_walkdir_search(
         || !pending_finished_folders.is_empty()
         || !pending_entries.is_empty()
     {
-        on_event
-            .send(SearchStreamEvent::Progress {
-                started_folders: pending_started_folders,
-                finished_folders: pending_finished_folders,
-                entries: pending_entries,
-                scanned_folders,
-                total_results,
-            })
-            .map_err(|e| e.to_string())?;
+        emit_progress_chunked(
+            &on_event,
+            &mut pending_started_folders,
+            &mut pending_finished_folders,
+            &mut pending_entries,
+            scanned_folders,
+            total_results,
+        )?;
     }
 
     let truncated = !cancelled && total_results >= cap && !queue.is_empty();
@@ -418,16 +478,22 @@ fn scan_folder_chunk(
             }
 
             let path = dir_entry.path();
+            let is_dir = file_type.is_dir();
+
+            if is_dir {
+                discovered_subfolders.push(path.to_string_lossy().to_string());
+            }
+
+            if !entry_matches_without_metadata(&path, is_dir, filters) {
+                continue;
+            }
+
             let metadata = match dir_entry.metadata() {
                 Ok(meta) => meta,
                 Err(_) => continue,
             };
 
-            if file_type.is_dir() {
-                discovered_subfolders.push(path.to_string_lossy().to_string());
-            }
-
-            if entry_matches(&path, &metadata, filters) {
+            if entry_matches_with_metadata(&metadata, filters) {
                 entries.push(to_file_entry(&path, &metadata));
             }
         }
