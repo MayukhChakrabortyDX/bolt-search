@@ -168,6 +168,7 @@ export async function runSearch({
     state.intentLoadingFolders = {};
     state.intentEmptyFolders = {};
     state.intentFocusedFolder = null;
+    state.focusedFolderPath = null;
     state.streamTruncated = false;
 
     try {
@@ -297,6 +298,7 @@ export async function runSearch({
         state.intentLoadingFolders = {};
         state.intentEmptyFolders = {};
         state.intentFocusedFolder = null;
+        state.focusedFolderPath = null;
         state.searchStatus = "Search failed";
     } finally {
         if (runId === state.activeRunId) {
@@ -322,6 +324,7 @@ export async function runStopSearch({
     state.scanningFolders = {};
     state.intentLoadingFolders = {};
     state.intentFocusedFolder = null;
+    state.focusedFolderPath = null;
     state.streamTruncated = false;
     state.searchStatus = "Stopping search...";
 

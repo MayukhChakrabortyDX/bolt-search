@@ -1,5 +1,7 @@
 import type { FileEntry, SearchFormState, SearchRunMode } from "./page-types";
 
+export type ExplorerLayoutMode = "default" | "focus";
+
 export type SearchControllerState = {
     searchForm: SearchFormState;
     showAdvanced: boolean;
@@ -15,12 +17,14 @@ export type SearchControllerState = {
     driveScanOrder: string[];
     streamingEnabled: boolean;
     intentEnabled: boolean;
+    layoutMode: ExplorerLayoutMode;
     scanningFolders: Record<string, boolean>;
     intentKnownFolders: Record<string, boolean>;
     intentScannedFolders: Record<string, boolean>;
     intentLoadingFolders: Record<string, boolean>;
     intentEmptyFolders: Record<string, boolean>;
     intentFocusedFolder: string | null;
+    focusedFolderPath: string | null;
     streamTruncated: boolean;
     activeRunMode: SearchRunMode;
     activeRunId: number;
