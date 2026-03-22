@@ -1,4 +1,3 @@
-mod download_master;
 mod search;
 mod streaming;
 
@@ -16,8 +15,6 @@ pub fn run() {
             streaming::search_streaming,
             streaming::search_with_progress,
             search::io_commands::open_in_explorer,
-            download_master::commands::download_file,
-            download_master::commands::social_download,
             search::io_commands::save_filter_file,
             search::io_commands::load_filter_file
         ])

@@ -1,11 +1,11 @@
-export type AppId = "search" | "download-master";
+export type AppId = "search";
 
 export const globalState = $state({
     activeApp: "search" as AppId,
 });
 
 export function isAppId(value: string): value is AppId {
-    return value === "search" || value === "download-master";
+    return value === "search";
 }
 
 export function setActiveApp(next: AppId): void {
