@@ -55,8 +55,10 @@ export function formToFilters(form: SearchFormState): Filter[] {
         push("name_contains", queryValue);
     }
 
-    for (const extension of parseExtensionTokens(form.extensionInput)) {
-        push("extension", extension);
+    if (form.kind !== "folder") {
+        for (const extension of parseExtensionTokens(form.extensionInput)) {
+            push("extension", extension);
+        }
     }
 
     for (const fragment of parseMultiValueInput(form.pathContainsInput)) {
@@ -92,14 +94,16 @@ export function formToFilters(form: SearchFormState): Filter[] {
         push("readonly");
     }
 
-    const minSize = form.sizeMin.trim();
-    if (minSize) {
-        push("size_gt", minSize, "", form.sizeMinUnit || "B");
-    }
+    if (form.kind !== "folder") {
+        const minSize = form.sizeMin.trim();
+        if (minSize) {
+            push("size_gt", minSize, "", form.sizeMinUnit || "B");
+        }
 
-    const maxSize = form.sizeMax.trim();
-    if (maxSize) {
-        push("size_lt", maxSize, "", form.sizeMaxUnit || "B");
+        const maxSize = form.sizeMax.trim();
+        if (maxSize) {
+            push("size_lt", maxSize, "", form.sizeMaxUnit || "B");
+        }
     }
 
     id = toDateRangeFilter(

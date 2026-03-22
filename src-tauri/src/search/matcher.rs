@@ -154,7 +154,7 @@ pub(crate) fn entry_matches_without_metadata(
         return false;
     }
 
-    if !filters.extensions.is_empty() {
+    if !is_dir && !filters.extensions.is_empty() {
         let ext = path
             .extension()
             .and_then(|e| e.to_str())
