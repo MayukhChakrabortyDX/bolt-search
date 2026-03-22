@@ -16,6 +16,7 @@
 	let layoutMode = $state<ExplorerLayoutMode>('default');
 	let appPickerOpen = $state(false);
 	let dragRegionEl: HTMLDivElement | null = null;
+	const isSearchAppActive = $derived(globalState.activeApp === 'search');
 	type ThemePreference = 'system' | 'light' | 'dark';
 	let themePreference: ThemePreference = 'system';
 	let themeMediaQuery: MediaQueryList | null = null;
@@ -260,56 +261,58 @@
 			</div>
 		</div>
 		<div class="window-controls">
-			<div class="topbar-layout" aria-label="Explorer layout mode">
-				<ChipSelect
-					containerClass="topbar-layout-chip"
-					ariaLabel="Explorer layout mode"
-					value={layoutMode}
-					options={layoutModeOptions}
-					onChange={(nextValue) => {
-						const nextMode = nextValue === 'focus' ? 'focus' : 'default';
-						syncLayoutMode(nextMode);
-					}}
-				/>
-			</div>
-			<button
-				class="window-control-button topbar-action"
-				type="button"
-				aria-label="Save Filter"
-				onclick={requestSaveFilter}
-				title="Save Filter"
-			>
-				<Save size={13} strokeWidth={2} />
-			</button>
-			<button
-				class="window-control-button topbar-action"
-				type="button"
-				aria-label="Load Filter"
-				onclick={requestLoadFilter}
-				title="Load Filter"
-			>
-				<FileDown size={13} strokeWidth={2} />
-			</button>
-			<button
-				class="window-control-button topbar-toggle"
-				type="button"
-				aria-label={streamingEnabled ? 'Disable streaming mode' : 'Enable streaming mode'}
-				title={streamingEnabled ? 'Streaming mode enabled' : 'Streaming mode disabled'}
-				onclick={toggleStreamingMode}
-			>
-				<span class={`streaming-indicator ${streamingEnabled ? 'on' : ''}`}></span>
-				<span class="topbar-toggle-label">Stream</span>
-			</button>
-			<button
-				class="window-control-button topbar-toggle"
-				type="button"
-				aria-label={intentEnabled ? 'Disable intent explorer mode' : 'Enable intent explorer mode'}
-				title={intentEnabled ? 'Intent explorer enabled' : 'Intent explorer disabled'}
-				onclick={toggleIntentMode}
-			>
-				<span class={`streaming-indicator ${intentEnabled ? 'on' : ''}`}></span>
-				<span class="topbar-toggle-label">Intent</span>
-			</button>
+			{#if isSearchAppActive}
+				<div class="topbar-layout" aria-label="Explorer layout mode">
+					<ChipSelect
+						containerClass="topbar-layout-chip"
+						ariaLabel="Explorer layout mode"
+						value={layoutMode}
+						options={layoutModeOptions}
+						onChange={(nextValue) => {
+							const nextMode = nextValue === 'focus' ? 'focus' : 'default';
+							syncLayoutMode(nextMode);
+						}}
+					/>
+				</div>
+				<button
+					class="window-control-button topbar-action"
+					type="button"
+					aria-label="Save Filter"
+					onclick={requestSaveFilter}
+					title="Save Filter"
+				>
+					<Save size={13} strokeWidth={2} />
+				</button>
+				<button
+					class="window-control-button topbar-action"
+					type="button"
+					aria-label="Load Filter"
+					onclick={requestLoadFilter}
+					title="Load Filter"
+				>
+					<FileDown size={13} strokeWidth={2} />
+				</button>
+				<button
+					class="window-control-button topbar-toggle"
+					type="button"
+					aria-label={streamingEnabled ? 'Disable streaming mode' : 'Enable streaming mode'}
+					title={streamingEnabled ? 'Streaming mode enabled' : 'Streaming mode disabled'}
+					onclick={toggleStreamingMode}
+				>
+					<span class={`streaming-indicator ${streamingEnabled ? 'on' : ''}`}></span>
+					<span class="topbar-toggle-label">Stream</span>
+				</button>
+				<button
+					class="window-control-button topbar-toggle"
+					type="button"
+					aria-label={intentEnabled ? 'Disable intent explorer mode' : 'Enable intent explorer mode'}
+					title={intentEnabled ? 'Intent explorer enabled' : 'Intent explorer disabled'}
+					onclick={toggleIntentMode}
+				>
+					<span class={`streaming-indicator ${intentEnabled ? 'on' : ''}`}></span>
+					<span class="topbar-toggle-label">Intent</span>
+				</button>
+			{/if}
 			<button
 				class="window-control-button theme-toggle"
 				type="button"

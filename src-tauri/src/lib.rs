@@ -15,6 +15,8 @@ pub fn run() {
             streaming::search_streaming,
             streaming::search_with_progress,
             search::io_commands::open_in_explorer,
+            search::io_commands::download_file,
+            search::io_commands::social_download,
             search::io_commands::save_filter_file,
             search::io_commands::load_filter_file
         ])
