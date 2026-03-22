@@ -45,11 +45,16 @@ export function attachControllerLifecycle({
             }
         }
     };
+    const onLayoutModeChange = (event: Event) => {
+        const customEvent = event as CustomEvent<{ mode?: unknown }>;
+        state.layoutMode = customEvent.detail?.mode === "focus" ? "focus" : "default";
+    };
 
     window.addEventListener("bolt-save-filter", onSave);
     window.addEventListener("bolt-load-filter", onLoad);
     window.addEventListener("bolt-streaming-mode-changed", onStreamingModeChange);
     window.addEventListener("bolt-intent-mode-changed", onIntentModeChange);
+    window.addEventListener("bolt-layout-mode-changed", onLayoutModeChange);
 
     runtime.streamWorkerRef.current = new Worker(
         new URL("../search-stream.worker.ts", import.meta.url),
@@ -86,6 +91,8 @@ export function attachControllerLifecycle({
     if (state.intentEnabled) {
         state.streamingEnabled = false;
     }
+    const storedLayoutMode = localStorage.getItem("bolt-search-layout-mode");
+    state.layoutMode = storedLayoutMode === "focus" ? "focus" : "default";
 
     void (async () => {
         try {
@@ -113,6 +120,7 @@ export function attachControllerLifecycle({
             onStreamingModeChange,
         );
         window.removeEventListener("bolt-intent-mode-changed", onIntentModeChange);
+        window.removeEventListener("bolt-layout-mode-changed", onLayoutModeChange);
         runtime.streamWorkerRef.current?.terminate();
         runtime.streamWorkerRef.current = null;
         runtime.streamCompletionResolvers.clear();

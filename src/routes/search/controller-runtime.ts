@@ -118,6 +118,7 @@ export function clearSearchResults(
     state.intentLoadingFolders = {};
     state.intentEmptyFolders = {};
     state.intentFocusedFolder = null;
+    state.focusedFolderPath = null;
     state.streamTruncated = false;
     state.activeRunMode = null;
     deps.streamCompletionResolvers.clear();

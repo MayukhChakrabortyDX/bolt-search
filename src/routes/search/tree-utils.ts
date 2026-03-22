@@ -162,6 +162,23 @@ export function flattenVisibleRows(
     return rows;
 }
 
+export function findTreeNodeByPath(
+    nodes: TreeNode[],
+    path: string,
+): TreeNode | null {
+    for (const node of nodes) {
+        if (node.path === path) {
+            return node;
+        }
+        const childMatch = findTreeNodeByPath(node.children, path);
+        if (childMatch) {
+            return childMatch;
+        }
+    }
+
+    return null;
+}
+
 export function rowIndentClass(depth: number, kind: "dir" | "file"): string {
     const classes = kind === "dir" ? DIR_INDENT_CLASSES : FILE_INDENT_CLASSES;
     const index = Math.max(0, Math.min(depth, classes.length - 1));

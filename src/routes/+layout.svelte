@@ -3,16 +3,23 @@
 	import { onMount } from 'svelte';
 	import { getCurrentWindow } from '@tauri-apps/api/window';
 	import { FileDown, Minus, Moon, Save, Square, Sun, X } from 'lucide-svelte';
+	import ChipSelect from '../lib/components/ChipSelect.svelte';
 
 	const { children } = $props();
 	const appWindow = getCurrentWindow();
 	let isDarkMode = $state(false);
 	let streamingEnabled = $state(true);
 	let intentEnabled = $state(false);
+	type ExplorerLayoutMode = 'default' | 'focus';
+	let layoutMode = $state<ExplorerLayoutMode>('default');
 	let dragRegionEl: HTMLDivElement | null = null;
 	type ThemePreference = 'system' | 'light' | 'dark';
 	let themePreference: ThemePreference = 'system';
 	let themeMediaQuery: MediaQueryList | null = null;
+	const layoutModeOptions = [
+		{ value: 'default', label: 'Default' },
+		{ value: 'focus', label: 'Focus' },
+	] as const;
 
 	function applyTheme(darkMode: boolean) {
 		if (typeof document === 'undefined') return;
@@ -54,6 +61,16 @@
 		window.dispatchEvent(
 			new CustomEvent('bolt-intent-mode-changed', {
 				detail: { enabled: intentEnabled },
+			})
+		);
+	}
+
+	function syncLayoutMode(next: ExplorerLayoutMode) {
+		layoutMode = next;
+		localStorage.setItem('bolt-search-layout-mode', next);
+		window.dispatchEvent(
+			new CustomEvent('bolt-layout-mode-changed', {
+				detail: { mode: next },
 			})
 		);
 	}
@@ -103,11 +120,14 @@
 		streamingEnabled = !(storedStreaming === '0' || storedStreaming === 'false');
 		const storedIntent = localStorage.getItem('bolt-search-intent-enabled');
 		intentEnabled = storedIntent === '1' || storedIntent === 'true';
+		const storedLayoutMode = localStorage.getItem('bolt-search-layout-mode');
+		layoutMode = storedLayoutMode === 'focus' ? 'focus' : 'default';
 		if (intentEnabled) {
 			streamingEnabled = false;
 		}
 		localStorage.removeItem('bolt-search-backend-mode');
 		syncModePreferences({ streaming: streamingEnabled, intent: intentEnabled });
+		syncLayoutMode(layoutMode);
 
 		void appWindow.setContentProtected(false).catch(() => {
 			// Ignore permission/platform failures; app remains usable.
@@ -180,6 +200,18 @@
 			<span class="window-title">Bolt Search Software</span>
 		</div>
 		<div class="window-controls">
+			<div class="topbar-layout" aria-label="Explorer layout mode">
+				<ChipSelect
+					containerClass="topbar-layout-chip"
+					ariaLabel="Explorer layout mode"
+					value={layoutMode}
+					options={layoutModeOptions}
+					onChange={(nextValue) => {
+						const nextMode = nextValue === 'focus' ? 'focus' : 'default';
+						syncLayoutMode(nextMode);
+					}}
+				/>
+			</div>
 			<button
 				class="window-control-button topbar-action"
 				type="button"

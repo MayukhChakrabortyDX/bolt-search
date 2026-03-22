@@ -46,12 +46,14 @@ function createInitialState(): SearchControllerState {
         driveScanOrder: [],
         streamingEnabled: true,
         intentEnabled: false,
+        layoutMode: "default",
         scanningFolders: {},
         intentKnownFolders: {},
         intentScannedFolders: {},
         intentLoadingFolders: {},
         intentEmptyFolders: {},
         intentFocusedFolder: null,
+        focusedFolderPath: null,
         streamTruncated: false,
         activeRunMode: null,
         activeRunId: 0,
@@ -235,6 +237,10 @@ export function createSearchController() {
         isFolderScanning: (path: string) =>
             isFolderScanning(state, path) || !!state.intentLoadingFolders[path],
         toggleDirectory: async (path: string, depth: number) => {
+            if (state.layoutMode === "focus") {
+                state.focusedFolderPath = path;
+            }
+
             if (state.intentEnabled) {
                 onIntentFolderFocus(state, path);
             }
@@ -245,6 +251,16 @@ export function createSearchController() {
 
             if (state.intentEnabled && next) {
                 await runIntentFolderScan(state, runtime, path);
+            }
+        },
+        focusFolder: async (path: string | null) => {
+            state.focusedFolderPath = path;
+            if (path) {
+                state.openDirectories = { ...state.openDirectories, [path]: true };
+
+                if (state.intentEnabled) {
+                    await runIntentFolderScan(state, runtime, path);
+                }
             }
         },
         isFolderEmpty: (path: string) => !!state.intentEmptyFolders[path],

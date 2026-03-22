@@ -5,7 +5,11 @@
     import { createSearchController } from "./search/controller.svelte";
     import { analyzeSearchForm, parseExtensionTokens } from "./search/form-utils";
     import { formToFilters } from "./search/form-mapping";
-    import { buildResultTree, flattenVisibleRows } from "./search/tree-utils";
+    import {
+        buildResultTree,
+        findTreeNodeByPath,
+        flattenVisibleRows,
+    } from "./search/tree-utils";
     import type { DriveScanRow } from "./search/page-types";
 
     const controller = createSearchController();
@@ -49,6 +53,31 @@
     const treeRows = $derived(
         flattenVisibleRows(resultTree, state.openDirectories),
     );
+    const focusTargetNode = $derived.by(() => {
+        if (state.layoutMode !== "focus") {
+            return null;
+        }
+
+        if (state.focusedFolderPath) {
+            const node = findTreeNodeByPath(resultTree, state.focusedFolderPath);
+            if (node?.isDir) {
+                return node;
+            }
+        }
+
+        return null;
+    });
+    const focusEntries = $derived.by(() => {
+        if (state.layoutMode !== "focus") {
+            return [];
+        }
+
+        if (focusTargetNode) {
+            return focusTargetNode.children;
+        }
+
+        return resultTree;
+    });
 
     const driveScanTotal = $derived(
         Object.values(state.displayedDriveScanCounts).reduce(
@@ -130,6 +159,7 @@
     />
 
     <SearchResultsPanel
+        layoutMode={state.layoutMode}
         searching={state.searching}
         searched={state.searched}
         searchStatus={state.searchStatus}
@@ -142,7 +172,10 @@
         displayPath={controller.displayPath}
         isFolderScanning={controller.isFolderScanning}
         isFolderEmpty={controller.isFolderEmpty}
+        focusedFolderPath={focusTargetNode ? focusTargetNode.path : null}
+        focusEntries={focusEntries}
         toggleDirectory={controller.toggleDirectory}
+        focusFolder={controller.focusFolder}
         openInExplorer={controller.openInExplorer}
     />
 </div>
