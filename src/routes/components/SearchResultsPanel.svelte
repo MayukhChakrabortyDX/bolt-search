@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { convertFileSrc } from "@tauri-apps/api/core";
+    import { convertFileSrc, invoke } from "@tauri-apps/api/core";
     import { fade } from "svelte/transition";
     import {
         ArrowLeft,
@@ -13,10 +13,15 @@
         LoaderCircle,
         X,
     } from "lucide-svelte";
-    import type { DriveScanRow, TreeNode, TreeRow } from "../search/page-types";
+    import type { DriveScanRow, FileEntry, TreeNode, TreeRow } from "../search/page-types";
 
     type PreviewKind = "image" | "text" | "pdf" | "audio" | "video" | "unsupported";
     type ExplorerLayoutMode = "default" | "focus";
+    type FolderPreviewResult = {
+        entries: FileEntry[];
+        next_folders: string[];
+        scanned_folders: number;
+    };
 
     let {
         searching,
@@ -66,6 +71,12 @@
     let previewText = $state("");
     let previewLoading = $state(false);
     let previewError = $state("");
+    let folderPreviewModalOpen = $state(false);
+    let folderPreviewTitle = $state("");
+    let folderPreviewPath = $state("");
+    let folderPreviewLoading = $state(false);
+    let folderPreviewError = $state("");
+    let folderPreviewEntries = $state<FileEntry[]>([]);
     let focusQuery = $state("");
 
     const filteredFocusEntries = $derived.by(() => {
@@ -160,6 +171,44 @@
     function closePreview(): void {
         previewModalOpen = false;
         resetPreviewState();
+    }
+
+    function closeFolderPreview(): void {
+        folderPreviewModalOpen = false;
+        folderPreviewError = "";
+        folderPreviewLoading = false;
+        folderPreviewEntries = [];
+    }
+
+    async function openFolderPreview(path: string, name: string): Promise<void> {
+        folderPreviewModalOpen = true;
+        folderPreviewPath = path;
+        folderPreviewTitle = name;
+        folderPreviewLoading = true;
+        folderPreviewError = "";
+        folderPreviewEntries = [];
+
+        try {
+            const preview = await invoke<FolderPreviewResult>("search_folder_batch", {
+                query: { filters: [] },
+                folders: [path],
+                limit: 500,
+                threadLimit: 4,
+            });
+
+            folderPreviewEntries = preview.entries
+                .slice()
+                .sort((a, b) => {
+                    if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+                    return a.name.localeCompare(b.name);
+                });
+        } catch (error) {
+            folderPreviewError = error instanceof Error
+                ? error.message
+                : "Failed to load folder preview";
+        } finally {
+            folderPreviewLoading = false;
+        }
     }
 
     async function openPreview(path: string, name: string): Promise<void> {
@@ -305,46 +354,58 @@
                     <div class="border-r border-zinc-200 dark:border-zinc-800 overflow-auto">
                         {#each treeRows as row (row.node.path)}
                             {#if row.node.isDir}
-                                <button
+                                <div
                                     class="w-full flex items-center gap-2 py-2 pr-3 text-left border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/70 {rowIndentClass(row.depth, 'dir')}"
-                                    onclick={() => toggleDirectory(row.node.path, row.depth)}
                                     title={displayPath(row.node.path)}
                                 >
-                                    <span class="w-3 text-center text-xs text-zinc-500 dark:text-zinc-400">
-                                        {#if row.hasChildren}
-                                            {#if row.isOpen}
-                                                <ChevronDown size={12} strokeWidth={2} />
-                                            {:else}
-                                                <ChevronRight size={12} strokeWidth={2} />
-                                            {/if}
-                                        {/if}
-                                    </span>
-                                    <Folder
-                                        size={14}
-                                        class="text-zinc-500 dark:text-zinc-400"
-                                        strokeWidth={2}
-                                    />
-                                    <span class="text-xs text-zinc-700 dark:text-zinc-100 font-medium"
-                                        >{row.node.name}</span
+                                    <button
+                                        class="flex min-w-0 flex-1 items-center gap-2 text-left"
+                                        onclick={() => toggleDirectory(row.node.path, row.depth)}
                                     >
-                                    {#if isFolderScanning(row.node.path)}
-                                        <LoaderCircle
-                                            size={12}
-                                            class="animate-spin text-emerald-600"
+                                        <span class="w-3 text-center text-xs text-zinc-500 dark:text-zinc-400">
+                                            {#if row.hasChildren}
+                                                {#if row.isOpen}
+                                                    <ChevronDown size={12} strokeWidth={2} />
+                                                {:else}
+                                                    <ChevronRight size={12} strokeWidth={2} />
+                                                {/if}
+                                            {/if}
+                                        </span>
+                                        <Folder
+                                            size={14}
+                                            class="text-zinc-500 dark:text-zinc-400"
                                             strokeWidth={2}
                                         />
-                                    {/if}
-                                    {#if isFolderEmpty(row.node.path)}
-                                        <span
-                                            class="inline-flex items-center rounded-md border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.04em] text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300"
+                                        <span class="text-xs text-zinc-700 dark:text-zinc-100 font-medium"
+                                            >{row.node.name}</span
                                         >
-                                            Empty
-                                        </span>
-                                    {/if}
-                                    <span class="text-xs text-zinc-400 dark:text-zinc-500 truncate"
-                                        >{displayPath(row.node.path)}</span
+                                        {#if isFolderScanning(row.node.path)}
+                                            <LoaderCircle
+                                                size={12}
+                                                class="animate-spin text-emerald-600"
+                                                strokeWidth={2}
+                                            />
+                                        {/if}
+                                        {#if isFolderEmpty(row.node.path)}
+                                            <span
+                                                class="inline-flex items-center rounded-md border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.04em] text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300"
+                                            >
+                                                Empty
+                                            </span>
+                                        {/if}
+                                        <span class="text-xs text-zinc-400 dark:text-zinc-500 truncate"
+                                            >{displayPath(row.node.path)}</span
+                                        >
+                                    </button>
+                                    <button
+                                        class="shrink-0 inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-2 py-1 text-[11px] font-semibold text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+                                        onclick={() => openFolderPreview(row.node.path, row.node.name)}
+                                        aria-label={`Preview folder ${row.node.name}`}
                                     >
-                                </button>
+                                        <Eye size={11} strokeWidth={2} />
+                                        Preview
+                                    </button>
+                                </div>
                             {:else}
                                 <button
                                     class="w-full flex items-center gap-2 py-2 pr-3 text-left border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/70 {rowIndentClass(row.depth, 'file')}"
@@ -401,23 +462,35 @@
                             {:else}
                                 {#each filteredFocusEntries as entry (entry.path)}
                                     {#if entry.isDir}
-                                        <button
+                                        <div
                                             class="w-full flex items-center gap-2 py-2 px-3 text-left border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/70"
-                                            onclick={() => focusFolder(entry.path)}
                                             title={displayPath(entry.path)}
                                         >
-                                            <Folder
-                                                size={14}
-                                                class="text-zinc-500 dark:text-zinc-400"
-                                                strokeWidth={2}
-                                            />
-                                            <span class="text-xs text-zinc-700 dark:text-zinc-100 font-medium"
-                                                >{entry.name}</span
+                                            <button
+                                                class="flex min-w-0 flex-1 items-center gap-2 text-left"
+                                                onclick={() => focusFolder(entry.path)}
                                             >
-                                            <span class="text-xs text-zinc-400 dark:text-zinc-500 truncate"
-                                                >{displayPath(entry.path)}</span
+                                                <Folder
+                                                    size={14}
+                                                    class="text-zinc-500 dark:text-zinc-400"
+                                                    strokeWidth={2}
+                                                />
+                                                <span class="text-xs text-zinc-700 dark:text-zinc-100 font-medium"
+                                                    >{entry.name}</span
+                                                >
+                                                <span class="text-xs text-zinc-400 dark:text-zinc-500 truncate"
+                                                    >{displayPath(entry.path)}</span
+                                                >
+                                            </button>
+                                            <button
+                                                class="shrink-0 inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-2 py-1 text-[11px] font-semibold text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+                                                onclick={() => openFolderPreview(entry.path, entry.name)}
+                                                aria-label={`Preview folder ${entry.name}`}
                                             >
-                                        </button>
+                                                <Eye size={11} strokeWidth={2} />
+                                                Preview
+                                            </button>
+                                        </div>
                                     {:else}
                                         <div
                                             class="w-full flex items-center gap-2 py-2 px-3 text-left border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/70"
@@ -461,46 +534,58 @@
                 >
                     {#each treeRows as row (row.node.path)}
                         {#if row.node.isDir}
-                            <button
+                            <div
                                 class="w-full flex items-center gap-2 py-2 pr-3 text-left border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/70 {rowIndentClass(row.depth, 'dir')}"
-                                onclick={() => toggleDirectory(row.node.path, row.depth)}
                                 title={displayPath(row.node.path)}
                             >
-                                <span class="w-3 text-center text-xs text-zinc-500 dark:text-zinc-400">
-                                    {#if row.hasChildren}
-                                        {#if row.isOpen}
-                                            <ChevronDown size={12} strokeWidth={2} />
-                                        {:else}
-                                            <ChevronRight size={12} strokeWidth={2} />
-                                        {/if}
-                                    {/if}
-                                </span>
-                                <Folder
-                                    size={14}
-                                    class="text-zinc-500 dark:text-zinc-400"
-                                    strokeWidth={2}
-                                />
-                                <span class="text-xs text-zinc-700 dark:text-zinc-100 font-medium"
-                                    >{row.node.name}</span
+                                <button
+                                    class="flex min-w-0 flex-1 items-center gap-2 text-left"
+                                    onclick={() => toggleDirectory(row.node.path, row.depth)}
                                 >
-                                {#if isFolderScanning(row.node.path)}
-                                    <LoaderCircle
-                                        size={12}
-                                        class="animate-spin text-emerald-600"
+                                    <span class="w-3 text-center text-xs text-zinc-500 dark:text-zinc-400">
+                                        {#if row.hasChildren}
+                                            {#if row.isOpen}
+                                                <ChevronDown size={12} strokeWidth={2} />
+                                            {:else}
+                                                <ChevronRight size={12} strokeWidth={2} />
+                                            {/if}
+                                        {/if}
+                                    </span>
+                                    <Folder
+                                        size={14}
+                                        class="text-zinc-500 dark:text-zinc-400"
                                         strokeWidth={2}
                                     />
-                                {/if}
-                                {#if isFolderEmpty(row.node.path)}
-                                    <span
-                                        class="inline-flex items-center rounded-md border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.04em] text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300"
+                                    <span class="text-xs text-zinc-700 dark:text-zinc-100 font-medium"
+                                        >{row.node.name}</span
                                     >
-                                        Empty
-                                    </span>
-                                {/if}
-                                <span class="text-xs text-zinc-400 dark:text-zinc-500 truncate"
-                                    >{displayPath(row.node.path)}</span
+                                    {#if isFolderScanning(row.node.path)}
+                                        <LoaderCircle
+                                            size={12}
+                                            class="animate-spin text-emerald-600"
+                                            strokeWidth={2}
+                                        />
+                                    {/if}
+                                    {#if isFolderEmpty(row.node.path)}
+                                        <span
+                                            class="inline-flex items-center rounded-md border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.04em] text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300"
+                                        >
+                                            Empty
+                                        </span>
+                                    {/if}
+                                    <span class="text-xs text-zinc-400 dark:text-zinc-500 truncate"
+                                        >{displayPath(row.node.path)}</span
+                                    >
+                                </button>
+                                <button
+                                    class="shrink-0 inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-2 py-1 text-[11px] font-semibold text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+                                    onclick={() => openFolderPreview(row.node.path, row.node.name)}
+                                    aria-label={`Preview folder ${row.node.name}`}
                                 >
-                            </button>
+                                    <Eye size={11} strokeWidth={2} />
+                                    Preview
+                                </button>
+                            </div>
                         {:else}
                             <div
                                 class="w-full flex items-center gap-2 py-2 pr-3 text-left border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/70 {rowIndentClass(row.depth, 'file')}"
@@ -591,6 +676,71 @@
                     {:else}
                         <pre class="max-h-[68vh] overflow-auto whitespace-pre-wrap rounded-md border border-zinc-200 bg-zinc-50 p-3 text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-200">{previewText}</pre>
                     {/if}
+                {/if}
+            </div>
+        </div>
+    </div>
+{/if}
+
+{#if folderPreviewModalOpen}
+    <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <button
+            class="absolute inset-0 bg-zinc-950/70"
+            onclick={closeFolderPreview}
+            aria-label="Close folder preview backdrop"
+        ></button>
+        <div
+            class="relative w-full max-w-3xl max-h-[86vh] overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-900"
+        >
+            <div class="flex items-center justify-between gap-3 border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
+                <div class="min-w-0">
+                    <p class="truncate text-sm font-semibold text-zinc-800 dark:text-zinc-100">
+                        Folder Preview: {folderPreviewTitle}
+                    </p>
+                    <p class="truncate text-xs text-zinc-500 dark:text-zinc-400">
+                        {displayPath(folderPreviewPath)}
+                    </p>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button
+                        class="inline-flex items-center rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                        onclick={() => openInExplorer(folderPreviewPath)}
+                    >
+                        Open in Files
+                    </button>
+                    <button
+                        class="inline-flex items-center rounded-md border border-zinc-300 bg-white p-1.5 text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                        onclick={closeFolderPreview}
+                        aria-label="Close folder preview"
+                    >
+                        <X size={14} strokeWidth={2} />
+                    </button>
+                </div>
+            </div>
+
+            <div class="max-h-[74vh] overflow-auto p-3">
+                {#if folderPreviewLoading}
+                    <p class="text-sm text-zinc-500 dark:text-zinc-400">Loading folder preview...</p>
+                {:else if folderPreviewError}
+                    <div class="rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
+                        {folderPreviewError}
+                    </div>
+                {:else if folderPreviewEntries.length === 0}
+                    <p class="text-sm text-zinc-500 dark:text-zinc-400">Folder appears to be empty.</p>
+                {:else}
+                    <div class="rounded-md border border-zinc-200 dark:border-zinc-700 overflow-hidden">
+                        {#each folderPreviewEntries as entry (entry.path)}
+                            <div class="flex items-center gap-2 border-b border-zinc-100 dark:border-zinc-800 px-3 py-2 last:border-b-0">
+                                {#if entry.is_dir}
+                                    <Folder size={14} class="text-zinc-500 dark:text-zinc-400" strokeWidth={2} />
+                                {:else}
+                                    <File size={14} class="text-zinc-500 dark:text-zinc-400" strokeWidth={2} />
+                                {/if}
+                                <span class="text-xs font-medium text-zinc-700 dark:text-zinc-100">{entry.name}</span>
+                                <span class="text-xs text-zinc-400 dark:text-zinc-500 truncate">{displayPath(entry.path)}</span>
+                            </div>
+                        {/each}
+                    </div>
                 {/if}
             </div>
         </div>
