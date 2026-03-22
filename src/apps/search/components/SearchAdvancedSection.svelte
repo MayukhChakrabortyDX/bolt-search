@@ -1,7 +1,7 @@
 <script lang="ts">
     import { ChevronDown, X } from "lucide-svelte";
-    import ChipSelect from "../../lib/components/ChipSelect.svelte";
-    import CalendarField from "../../lib/components/CalendarField.svelte";
+    import ChipSelect from "../../../lib/components/ChipSelect.svelte";
+    import CalendarField from "../../../lib/components/CalendarField.svelte";
     import type { SearchFormState } from "../search/page-types";
 
     let {

@@ -1,5 +1,5 @@
 <script lang="ts">
-    import ChipSelect from "../../lib/components/ChipSelect.svelte";
+    import ChipSelect from "../../../lib/components/ChipSelect.svelte";
     import { FolderOpen, X } from "lucide-svelte";
     import type { SearchFormState } from "../search/page-types";
 

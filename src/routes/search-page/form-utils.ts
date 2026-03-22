@@ -1,4 +1,4 @@
-import type { Filter, FilterType } from "../filter.svelte";
+import type { Filter, FilterType } from "../../apps/search/filter.svelte";
 import type { SearchFormState, ValidationIssue } from "./types";
 
 export function createDefaultSearchForm(): SearchFormState {

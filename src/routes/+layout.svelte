@@ -4,6 +4,8 @@
 	import { getCurrentWindow } from '@tauri-apps/api/window';
 	import { FileDown, Grid3X3, Minus, Moon, Save, Square, Sun, X } from 'lucide-svelte';
 	import ChipSelect from '../lib/components/ChipSelect.svelte';
+    import { APP_REGISTRY } from "../apps/registry";
+    import { globalState, isAppId, setActiveApp } from "../global.svelte";
 
 	const { children } = $props();
 	const appWindow = getCurrentWindow();
@@ -12,8 +14,6 @@
 	let intentEnabled = $state(false);
 	type ExplorerLayoutMode = 'default' | 'focus';
 	let layoutMode = $state<ExplorerLayoutMode>('default');
-	type AppTab = 'search';
-	let appTab = $state<AppTab>('search');
 	let appPickerOpen = $state(false);
 	let dragRegionEl: HTMLDivElement | null = null;
 	type ThemePreference = 'system' | 'light' | 'dark';
@@ -23,20 +23,7 @@
 		{ value: 'default', label: 'Default' },
 		{ value: 'focus', label: 'Focus' },
 	] as const;
-	type AppOption = {
-		value: AppTab;
-		label: string;
-		description: string;
-		available: boolean;
-	};
-	const appTabOptions: ReadonlyArray<AppOption> = [
-		{
-			value: 'search',
-			label: 'Search',
-			description: 'File and folder discovery with filters',
-			available: true,
-		},
-	];
+	const appTabOptions = APP_REGISTRY;
 
 	function applyTheme(darkMode: boolean) {
 		if (typeof document === 'undefined') return;
@@ -92,8 +79,12 @@
 		);
 	}
 
-	function syncAppTab(next: AppTab) {
-		appTab = next;
+	function syncAppTab(next: string) {
+		if (!isAppId(next)) {
+			return;
+		}
+
+		setActiveApp(next);
 		localStorage.setItem('bolt-active-app-tab', next);
 		window.dispatchEvent(
 			new CustomEvent('bolt-app-tab-changed', {
@@ -110,9 +101,9 @@
 		appPickerOpen = false;
 	}
 
-	function selectApp(option: AppOption) {
+	function selectApp(option: (typeof appTabOptions)[number]) {
 		if (!option.available) return;
-		syncAppTab(option.value);
+		syncAppTab(option.id);
 		closeAppPicker();
 	}
 
@@ -164,14 +155,16 @@
 		const storedLayoutMode = localStorage.getItem('bolt-search-layout-mode');
 		layoutMode = storedLayoutMode === 'focus' ? 'focus' : 'default';
 		const storedAppTab = localStorage.getItem('bolt-active-app-tab');
-		appTab = storedAppTab === 'search' ? 'search' : 'search';
+		if (storedAppTab && isAppId(storedAppTab)) {
+			setActiveApp(storedAppTab);
+		}
 		if (intentEnabled) {
 			streamingEnabled = false;
 		}
 		localStorage.removeItem('bolt-search-backend-mode');
 		syncModePreferences({ streaming: streamingEnabled, intent: intentEnabled });
 		syncLayoutMode(layoutMode);
-		syncAppTab(appTab);
+		syncAppTab(globalState.activeApp);
 
 		void appWindow.setContentProtected(false).catch(() => {
 			// Ignore permission/platform failures; app remains usable.
@@ -258,7 +251,7 @@
 					title="Open app picker"
 				>
 					<Grid3X3 size={13} strokeWidth={2} />
-					<span>{appTabOptions.find((option) => option.value === appTab)?.label ?? 'App'}</span>
+					<span>{appTabOptions.find((option) => option.id === globalState.activeApp)?.label ?? 'App'}</span>
 				</button>
 			</div>
 
@@ -364,12 +357,12 @@
 				{#each appTabOptions as option}
 					<button
 						type="button"
-						class={`app-picker-item ${option.value === appTab ? 'active' : ''}`}
+						class={`app-picker-item ${option.id === globalState.activeApp ? 'active' : ''}`}
 						onclick={() => selectApp(option)}
 					>
 						<div class="app-picker-item-title-row">
 							<span class="app-picker-item-title">{option.label}</span>
-							{#if option.value === appTab}
+							{#if option.id === globalState.activeApp}
 								<span class="app-picker-active-pill">Active</span>
 							{/if}
 						</div>
