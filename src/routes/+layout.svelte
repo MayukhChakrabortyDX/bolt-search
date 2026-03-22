@@ -2,7 +2,7 @@
 	import './layout.css';
 	import { onMount } from 'svelte';
 	import { getCurrentWindow } from '@tauri-apps/api/window';
-	import { FileDown, Minus, Moon, Save, Square, Sun, X } from 'lucide-svelte';
+	import { FileDown, Grid3X3, Minus, Moon, Save, Square, Sun, X } from 'lucide-svelte';
 	import ChipSelect from '../lib/components/ChipSelect.svelte';
 
 	const { children } = $props();
@@ -12,6 +12,9 @@
 	let intentEnabled = $state(false);
 	type ExplorerLayoutMode = 'default' | 'focus';
 	let layoutMode = $state<ExplorerLayoutMode>('default');
+	type AppTab = 'search';
+	let appTab = $state<AppTab>('search');
+	let appPickerOpen = $state(false);
 	let dragRegionEl: HTMLDivElement | null = null;
 	type ThemePreference = 'system' | 'light' | 'dark';
 	let themePreference: ThemePreference = 'system';
@@ -20,6 +23,20 @@
 		{ value: 'default', label: 'Default' },
 		{ value: 'focus', label: 'Focus' },
 	] as const;
+	type AppOption = {
+		value: AppTab;
+		label: string;
+		description: string;
+		available: boolean;
+	};
+	const appTabOptions: ReadonlyArray<AppOption> = [
+		{
+			value: 'search',
+			label: 'Search',
+			description: 'File and folder discovery with filters',
+			available: true,
+		},
+	];
 
 	function applyTheme(darkMode: boolean) {
 		if (typeof document === 'undefined') return;
@@ -75,6 +92,30 @@
 		);
 	}
 
+	function syncAppTab(next: AppTab) {
+		appTab = next;
+		localStorage.setItem('bolt-active-app-tab', next);
+		window.dispatchEvent(
+			new CustomEvent('bolt-app-tab-changed', {
+				detail: { tab: next },
+			})
+		);
+	}
+
+	function openAppPicker() {
+		appPickerOpen = true;
+	}
+
+	function closeAppPicker() {
+		appPickerOpen = false;
+	}
+
+	function selectApp(option: AppOption) {
+		if (!option.available) return;
+		syncAppTab(option.value);
+		closeAppPicker();
+	}
+
 	onMount(() => {
 		let hasShownWindow = false;
 
@@ -122,12 +163,15 @@
 		intentEnabled = storedIntent === '1' || storedIntent === 'true';
 		const storedLayoutMode = localStorage.getItem('bolt-search-layout-mode');
 		layoutMode = storedLayoutMode === 'focus' ? 'focus' : 'default';
+		const storedAppTab = localStorage.getItem('bolt-active-app-tab');
+		appTab = storedAppTab === 'search' ? 'search' : 'search';
 		if (intentEnabled) {
 			streamingEnabled = false;
 		}
 		localStorage.removeItem('bolt-search-backend-mode');
 		syncModePreferences({ streaming: streamingEnabled, intent: intentEnabled });
 		syncLayoutMode(layoutMode);
+		syncAppTab(appTab);
 
 		void appWindow.setContentProtected(false).catch(() => {
 			// Ignore permission/platform failures; app remains usable.
@@ -194,10 +238,33 @@
 	}
 </script>
 
+<svelte:window
+	onkeydown={(event) => {
+		if (event.key === 'Escape' && appPickerOpen) {
+			closeAppPicker();
+		}
+	}}
+/>
+
 <div class="app-shell">
 	<header class="window-titlebar" data-tauri-drag-region>
-		<div class="window-drag-region" data-tauri-drag-region bind:this={dragRegionEl}>
-			<span class="window-title">Bolt Search Software</span>
+		<div class="window-left-group">
+			<div class="window-app-selector" aria-label="Application selector">
+				<button
+					class="window-app-selector-button"
+					type="button"
+					onclick={openAppPicker}
+					aria-label="Open app picker"
+					title="Open app picker"
+				>
+					<Grid3X3 size={13} strokeWidth={2} />
+					<span>{appTabOptions.find((option) => option.value === appTab)?.label ?? 'App'}</span>
+				</button>
+			</div>
+
+			<div class="window-drag-region" data-tauri-drag-region bind:this={dragRegionEl}>
+				<span class="window-title">Bolt Search Software</span>
+			</div>
 		</div>
 		<div class="window-controls">
 			<div class="topbar-layout" aria-label="Explorer layout mode">
@@ -278,3 +345,38 @@
 		{@render children()}
 	</main>
 </div>
+
+{#if appPickerOpen}
+	<div class="app-picker-overlay">
+		<button
+			class="app-picker-backdrop"
+			onclick={closeAppPicker}
+			aria-label="Close app picker"
+		></button>
+		<div class="app-picker-modal">
+			<div class="app-picker-header">
+				<h2>Applications</h2>
+				<button type="button" class="app-picker-close" onclick={closeAppPicker} aria-label="Close">
+					<X size={14} strokeWidth={2} />
+				</button>
+			</div>
+			<div class="app-picker-grid">
+				{#each appTabOptions as option}
+					<button
+						type="button"
+						class={`app-picker-item ${option.value === appTab ? 'active' : ''}`}
+						onclick={() => selectApp(option)}
+					>
+						<div class="app-picker-item-title-row">
+							<span class="app-picker-item-title">{option.label}</span>
+							{#if option.value === appTab}
+								<span class="app-picker-active-pill">Active</span>
+							{/if}
+						</div>
+						<span class="app-picker-item-description">{option.description}</span>
+					</button>
+				{/each}
+			</div>
+		</div>
+	</div>
+{/if}
