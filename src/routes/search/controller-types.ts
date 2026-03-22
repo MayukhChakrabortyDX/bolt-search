@@ -14,7 +14,13 @@ export type SearchControllerState = {
     displayedDriveScanCounts: Record<string, number>;
     driveScanOrder: string[];
     streamingEnabled: boolean;
+    intentEnabled: boolean;
     scanningFolders: Record<string, boolean>;
+    intentKnownFolders: Record<string, boolean>;
+    intentScannedFolders: Record<string, boolean>;
+    intentLoadingFolders: Record<string, boolean>;
+    intentEmptyFolders: Record<string, boolean>;
+    intentFocusedFolder: string | null;
     streamTruncated: boolean;
     activeRunMode: SearchRunMode;
     activeRunId: number;

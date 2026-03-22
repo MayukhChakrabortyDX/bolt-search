@@ -113,6 +113,11 @@ export function clearSearchResults(
     state.driveScanOrder = [];
     stopDriveCountAnimations(deps.driveCountAnimationCancels);
     state.scanningFolders = {};
+    state.intentKnownFolders = {};
+    state.intentScannedFolders = {};
+    state.intentLoadingFolders = {};
+    state.intentEmptyFolders = {};
+    state.intentFocusedFolder = null;
     state.streamTruncated = false;
     state.activeRunMode = null;
     deps.streamCompletionResolvers.clear();

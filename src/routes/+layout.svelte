@@ -8,6 +8,7 @@
 	const appWindow = getCurrentWindow();
 	let isDarkMode = $state(false);
 	let streamingEnabled = $state(true);
+	let intentEnabled = $state(false);
 	let dragRegionEl: HTMLDivElement | null = null;
 	type ThemePreference = 'system' | 'light' | 'dark';
 	let themePreference: ThemePreference = 'system';
@@ -31,11 +32,28 @@
 	}
 
 	function syncStreamingPreference(enabled: boolean) {
-		streamingEnabled = enabled;
-		localStorage.setItem('bolt-search-streaming-enabled', enabled ? '1' : '0');
+		syncModePreferences({ streaming: enabled, intent: enabled ? false : intentEnabled });
+	}
+
+	function syncIntentPreference(enabled: boolean) {
+		syncModePreferences({ streaming: enabled ? false : streamingEnabled, intent: enabled });
+ 	}
+
+	function syncModePreferences(next: { streaming: boolean; intent: boolean }) {
+		streamingEnabled = next.streaming;
+		intentEnabled = next.intent;
+
+		localStorage.setItem('bolt-search-streaming-enabled', streamingEnabled ? '1' : '0');
+		localStorage.setItem('bolt-search-intent-enabled', intentEnabled ? '1' : '0');
+
 		window.dispatchEvent(
 			new CustomEvent('bolt-streaming-mode-changed', {
-				detail: { enabled },
+				detail: { enabled: streamingEnabled },
+			})
+		);
+		window.dispatchEvent(
+			new CustomEvent('bolt-intent-mode-changed', {
+				detail: { enabled: intentEnabled },
 			})
 		);
 	}
@@ -83,12 +101,13 @@
 
 		const storedStreaming = localStorage.getItem('bolt-search-streaming-enabled');
 		streamingEnabled = !(storedStreaming === '0' || storedStreaming === 'false');
+		const storedIntent = localStorage.getItem('bolt-search-intent-enabled');
+		intentEnabled = storedIntent === '1' || storedIntent === 'true';
+		if (intentEnabled) {
+			streamingEnabled = false;
+		}
 		localStorage.removeItem('bolt-search-backend-mode');
-		window.dispatchEvent(
-			new CustomEvent('bolt-streaming-mode-changed', {
-				detail: { enabled: streamingEnabled },
-			})
-		);
+		syncModePreferences({ streaming: streamingEnabled, intent: intentEnabled });
 
 		void appWindow.setContentProtected(false).catch(() => {
 			// Ignore permission/platform failures; app remains usable.
@@ -116,6 +135,10 @@
 
 	function toggleStreamingMode() {
 		syncStreamingPreference(!streamingEnabled);
+	}
+
+	function toggleIntentMode() {
+		syncIntentPreference(!intentEnabled);
 	}
 
 	async function startDrag(event: MouseEvent) {
@@ -184,6 +207,16 @@
 			>
 				<span class={`streaming-indicator ${streamingEnabled ? 'on' : ''}`}></span>
 				<span class="topbar-toggle-label">Stream</span>
+			</button>
+			<button
+				class="window-control-button topbar-toggle"
+				type="button"
+				aria-label={intentEnabled ? 'Disable intent explorer mode' : 'Enable intent explorer mode'}
+				title={intentEnabled ? 'Intent explorer enabled' : 'Intent explorer disabled'}
+				onclick={toggleIntentMode}
+			>
+				<span class={`streaming-indicator ${intentEnabled ? 'on' : ''}`}></span>
+				<span class="topbar-toggle-label">Intent</span>
 			</button>
 			<button
 				class="window-control-button theme-toggle"
