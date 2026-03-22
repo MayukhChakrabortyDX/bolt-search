@@ -1,12 +1,13 @@
 import SearchApp from "./search/SearchApp.svelte";
 import { type AppId, isAppId } from "../global.svelte";
+import type { Component } from "svelte";
 
 export type RegisteredAppDefinition = {
     id: AppId;
     label: string;
     description: string;
     available: boolean;
-    component: typeof SearchApp;
+    component: Component;
 };
 
 export const APP_REGISTRY: ReadonlyArray<RegisteredAppDefinition> = [
