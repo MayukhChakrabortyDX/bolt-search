@@ -30,10 +30,21 @@
     const activeScanningFolders = $derived(
         state.activeRunMode === "streaming"
             ? Object.keys(state.scanningFolders).filter((path) => state.scanningFolders[path])
+            : state.intentEnabled
+              ? Object.keys(state.intentLoadingFolders).filter(
+                    (path) => state.intentLoadingFolders[path],
+                )
+            : [],
+    );
+    const intentDiscoveredFolders = $derived(
+        state.intentEnabled
+            ? Object.keys(state.intentKnownFolders).filter(
+                  (path) => state.intentKnownFolders[path],
+              )
             : [],
     );
     const resultTree = $derived(
-        buildResultTree(state.results, activeScanningFolders),
+        buildResultTree(state.results, activeScanningFolders, intentDiscoveredFolders),
     );
     const treeRows = $derived(
         flattenVisibleRows(resultTree, state.openDirectories),
@@ -130,6 +141,7 @@
         rowIndentClass={controller.rowIndentClass}
         displayPath={controller.displayPath}
         isFolderScanning={controller.isFolderScanning}
+        isFolderEmpty={controller.isFolderEmpty}
         toggleDirectory={controller.toggleDirectory}
         openInExplorer={controller.openInExplorer}
     />

@@ -4,9 +4,9 @@ import {
     createScopedQuery,
     type SearchRunMode,
 } from "./page-types";
-import { analyzeSearchForm, dedupePaths } from "./form-utils";
+import { analyzeSearchForm, dedupePaths, normalizePath } from "./form-utils";
 import { formToFilters } from "./form-mapping";
-import { initializeDriveScanSlots } from "./drive-utils";
+import { incrementDriveScanned, initializeDriveScanSlots } from "./drive-utils";
 import { scanRootsBatchWithProgress, scanRootsStreaming } from "./runtime";
 import type {
     SearchControllerState,
@@ -23,6 +23,117 @@ type SearchRunnerDeps = {
     runtime: SearchRuntimeDeps;
     timer: SearchTimerControls;
 };
+
+type FolderBatchResult = {
+    entries: SearchControllerState["results"];
+    next_folders: string[];
+    scanned_folders: number;
+};
+
+function markKnownFolders(
+    state: SearchControllerState,
+    folders: string[],
+): void {
+    if (folders.length === 0) return;
+
+    const next = { ...state.intentKnownFolders };
+    for (const folder of folders) {
+        const normalized = normalizePath(folder);
+        if (!normalized) continue;
+        next[normalized] = true;
+    }
+    state.intentKnownFolders = next;
+}
+
+function markScannedFolder(state: SearchControllerState, folder: string): void {
+    const normalized = normalizePath(folder);
+    if (!normalized) return;
+
+    state.intentScannedFolders = {
+        ...state.intentScannedFolders,
+        [normalized]: true,
+    };
+}
+
+function setFolderEmptyState(
+    state: SearchControllerState,
+    folder: string,
+    empty: boolean,
+): void {
+    const normalized = normalizePath(folder);
+    if (!normalized) return;
+
+    if (empty) {
+        state.intentEmptyFolders = {
+            ...state.intentEmptyFolders,
+            [normalized]: true,
+        };
+        return;
+    }
+
+    if (!state.intentEmptyFolders[normalized]) return;
+    const next = { ...state.intentEmptyFolders };
+    delete next[normalized];
+    state.intentEmptyFolders = next;
+}
+
+export function onIntentFolderFocus(
+    state: SearchControllerState,
+    focusedFolderPath: string,
+): void {
+    if (!state.intentEnabled) return;
+
+    const focused = normalizePath(focusedFolderPath);
+    if (!focused) return;
+
+    const previousFocused = state.intentFocusedFolder;
+    state.intentFocusedFolder = focused;
+
+    if (!previousFocused || previousFocused === focused) {
+        return;
+    }
+
+    if (!state.intentEmptyFolders[previousFocused]) {
+        return;
+    }
+
+    if (state.intentKnownFolders[previousFocused]) {
+        const nextKnown = { ...state.intentKnownFolders };
+        delete nextKnown[previousFocused];
+        state.intentKnownFolders = nextKnown;
+    }
+
+    if (state.openDirectories[previousFocused] !== undefined) {
+        const nextOpen = { ...state.openDirectories };
+        delete nextOpen[previousFocused];
+        state.openDirectories = nextOpen;
+    }
+
+    if (state.intentScannedFolders[previousFocused]) {
+        const nextScanned = { ...state.intentScannedFolders };
+        delete nextScanned[previousFocused];
+        state.intentScannedFolders = nextScanned;
+    }
+
+    if (state.intentLoadingFolders[previousFocused]) {
+        const nextLoading = { ...state.intentLoadingFolders };
+        delete nextLoading[previousFocused];
+        state.intentLoadingFolders = nextLoading;
+    }
+
+    const nextEmpty = { ...state.intentEmptyFolders };
+    delete nextEmpty[previousFocused];
+    state.intentEmptyFolders = nextEmpty;
+}
+
+function appendIntentResults(
+    state: SearchControllerState,
+    entries: SearchControllerState["results"],
+): void {
+    if (entries.length === 0 || state.results.length >= MAX_RESULTS) return;
+    const remaining = MAX_RESULTS - state.results.length;
+    state.results.push(...entries.slice(0, remaining));
+}
 
 export async function runSearch({
     state,
@@ -52,6 +163,11 @@ export async function runSearch({
     state.displayedDriveScanCounts = {};
     state.driveScanOrder = [];
     state.scanningFolders = {};
+    state.intentKnownFolders = {};
+    state.intentScannedFolders = {};
+    state.intentLoadingFolders = {};
+    state.intentEmptyFolders = {};
+    state.intentFocusedFolder = null;
     state.streamTruncated = false;
 
     try {
@@ -89,6 +205,42 @@ export async function runSearch({
         state.driveScanOrder = slots.driveScanOrder;
         state.driveScanCounts = slots.driveScanCounts;
         state.displayedDriveScanCounts = slots.displayedDriveScanCounts;
+
+        if (state.intentEnabled) {
+            const scopedQuery = createScopedQuery(formToFilters(state.searchForm));
+            const batch = await invoke<FolderBatchResult>("search_folder_batch", {
+                query: scopedQuery,
+                folders: rootsToScan,
+                limit: MAX_RESULTS,
+                threadLimit: 6,
+            });
+
+            if (runId !== state.activeRunId) {
+                return;
+            }
+
+            markKnownFolders(state, rootsToScan);
+            markKnownFolders(state, batch.next_folders);
+            for (const root of rootsToScan) {
+                markScannedFolder(state, root);
+                state.driveScanOrder = incrementDriveScanned(
+                    root,
+                    1,
+                    state.driveScanOrder,
+                    state.driveScanCounts,
+                    state.displayedDriveScanCounts,
+                    runtime.driveCountAnimationCancels,
+                );
+            }
+
+            state.results = [];
+            appendIntentResults(state, batch.entries);
+            for (const root of rootsToScan) {
+                setFolderEmptyState(state, root, false);
+            }
+            state.searchStatus = `Intent ready (${state.results.length} result${state.results.length === 1 ? "" : "s"}). Expand folders to continue.`;
+            return;
+        }
 
         const runMode: Exclude<SearchRunMode, null> = state.streamingEnabled
             ? "streaming"
@@ -142,6 +294,9 @@ export async function runSearch({
         console.error("Search failed:", error);
         state.results = [];
         state.scanningFolders = {};
+        state.intentLoadingFolders = {};
+        state.intentEmptyFolders = {};
+        state.intentFocusedFolder = null;
         state.searchStatus = "Search failed";
     } finally {
         if (runId === state.activeRunId) {
@@ -165,6 +320,8 @@ export async function runStopSearch({
     timer.stop();
     state.searching = false;
     state.scanningFolders = {};
+    state.intentLoadingFolders = {};
+    state.intentFocusedFolder = null;
     state.streamTruncated = false;
     state.searchStatus = "Stopping search...";
 
@@ -197,4 +354,79 @@ export async function runStopSearch({
 
 export async function openInExplorer(path: string): Promise<void> {
     await invoke("open_in_explorer", { path });
+}
+
+export async function runIntentFolderScan(
+    state: SearchControllerState,
+    runtime: SearchRuntimeDeps,
+    folderPath: string,
+): Promise<void> {
+    if (!state.intentEnabled) return;
+    const normalizedFolder = normalizePath(folderPath);
+    if (!normalizedFolder) return;
+    if (state.intentScannedFolders[normalizedFolder]) return;
+    if (state.intentLoadingFolders[normalizedFolder]) return;
+
+    const runId = state.activeRunId;
+    const remaining = MAX_RESULTS - state.results.length;
+    if (remaining <= 0) {
+        state.searchStatus = "Done (max cap reached)";
+        return;
+    }
+
+    state.intentLoadingFolders = {
+        ...state.intentLoadingFolders,
+        [normalizedFolder]: true,
+    };
+    state.searchStatus = "Intent: scanning selected folder...";
+
+    try {
+        const scopedQuery = createScopedQuery(formToFilters(state.searchForm));
+        const batch = await invoke<FolderBatchResult>("search_folder_batch", {
+            query: scopedQuery,
+            folders: [normalizedFolder],
+            limit: remaining,
+            threadLimit: 6,
+        });
+
+        if (runId !== state.activeRunId) {
+            return;
+        }
+
+        appendIntentResults(state, batch.entries);
+        markKnownFolders(state, batch.next_folders);
+        markScannedFolder(state, normalizedFolder);
+        setFolderEmptyState(
+            state,
+            normalizedFolder,
+            batch.entries.length === 0 && batch.next_folders.length === 0,
+        );
+        state.driveScanOrder = incrementDriveScanned(
+            normalizedFolder,
+            batch.scanned_folders,
+            state.driveScanOrder,
+            state.driveScanCounts,
+            state.displayedDriveScanCounts,
+            runtime.driveCountAnimationCancels,
+        );
+
+        const reachedCap = state.results.length >= MAX_RESULTS;
+        state.searchStatus = reachedCap
+            ? `Intent ready (${state.results.length} results, max cap reached).`
+            : `Intent ready (${state.results.length} result${state.results.length === 1 ? "" : "s"}). Expand folders to continue.`;
+    } catch (error) {
+        if (runId !== state.activeRunId) {
+            return;
+        }
+        console.error("Intent folder scan failed:", error);
+        state.searchStatus = "Intent scan failed";
+    } finally {
+        if (runId === state.activeRunId) {
+            if (state.intentLoadingFolders[normalizedFolder]) {
+                const nextLoading = { ...state.intentLoadingFolders };
+                delete nextLoading[normalizedFolder];
+                state.intentLoadingFolders = nextLoading;
+            }
+        }
+    }
 }

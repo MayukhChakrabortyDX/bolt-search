@@ -31,12 +31,25 @@ export function attachControllerLifecycle({
         const customEvent = event as CustomEvent<{ enabled?: unknown }>;
         if (typeof customEvent.detail?.enabled === "boolean") {
             state.streamingEnabled = customEvent.detail.enabled;
+            if (state.streamingEnabled) {
+                state.intentEnabled = false;
+            }
+        }
+    };
+    const onIntentModeChange = (event: Event) => {
+        const customEvent = event as CustomEvent<{ enabled?: unknown }>;
+        if (typeof customEvent.detail?.enabled === "boolean") {
+            state.intentEnabled = customEvent.detail.enabled;
+            if (state.intentEnabled) {
+                state.streamingEnabled = false;
+            }
         }
     };
 
     window.addEventListener("bolt-save-filter", onSave);
     window.addEventListener("bolt-load-filter", onLoad);
     window.addEventListener("bolt-streaming-mode-changed", onStreamingModeChange);
+    window.addEventListener("bolt-intent-mode-changed", onIntentModeChange);
 
     runtime.streamWorkerRef.current = new Worker(
         new URL("../search-stream.worker.ts", import.meta.url),
@@ -68,6 +81,11 @@ export function attachControllerLifecycle({
 
     const storedStreaming = localStorage.getItem("bolt-search-streaming-enabled");
     state.streamingEnabled = !(storedStreaming === "0" || storedStreaming === "false");
+    const storedIntent = localStorage.getItem("bolt-search-intent-enabled");
+    state.intentEnabled = storedIntent === "1" || storedIntent === "true";
+    if (state.intentEnabled) {
+        state.streamingEnabled = false;
+    }
 
     void (async () => {
         try {
@@ -94,6 +112,7 @@ export function attachControllerLifecycle({
             "bolt-streaming-mode-changed",
             onStreamingModeChange,
         );
+        window.removeEventListener("bolt-intent-mode-changed", onIntentModeChange);
         runtime.streamWorkerRef.current?.terminate();
         runtime.streamWorkerRef.current = null;
         runtime.streamCompletionResolvers.clear();

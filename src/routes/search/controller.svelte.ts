@@ -15,7 +15,13 @@ import { rowIndentClass } from "./tree-utils";
 import { stopDriveCountAnimations } from "./drive-utils";
 import { formToFilters } from "./form-mapping";
 import { clearSearchResults, isFolderScanning } from "./controller-runtime";
-import { runSearch, runStopSearch, openInExplorer } from "./controller-search";
+import {
+    onIntentFolderFocus,
+    runIntentFolderScan,
+    runSearch,
+    runStopSearch,
+    openInExplorer,
+} from "./controller-search";
 import { attachControllerLifecycle } from "./controller-lifecycle";
 import { saveFilterProfile, loadFilterProfile } from "./filter-persistence";
 import type {
@@ -39,7 +45,13 @@ function createInitialState(): SearchControllerState {
         displayedDriveScanCounts: {},
         driveScanOrder: [],
         streamingEnabled: true,
+        intentEnabled: false,
         scanningFolders: {},
+        intentKnownFolders: {},
+        intentScannedFolders: {},
+        intentLoadingFolders: {},
+        intentEmptyFolders: {},
+        intentFocusedFolder: null,
         streamTruncated: false,
         activeRunMode: null,
         activeRunId: 0,
@@ -220,12 +232,22 @@ export function createSearchController() {
         removeScopeFolder,
         resetSearchForm,
         pickScopeFolders,
-        isFolderScanning: (path: string) => isFolderScanning(state, path),
-        toggleDirectory: (path: string, depth: number) => {
+        isFolderScanning: (path: string) =>
+            isFolderScanning(state, path) || !!state.intentLoadingFolders[path],
+        toggleDirectory: async (path: string, depth: number) => {
+            if (state.intentEnabled) {
+                onIntentFolderFocus(state, path);
+            }
+
             const current = state.openDirectories[path];
             const next = current !== undefined ? !current : depth !== 0;
             state.openDirectories = { ...state.openDirectories, [path]: next };
+
+            if (state.intentEnabled && next) {
+                await runIntentFolderScan(state, runtime, path);
+            }
         },
+        isFolderEmpty: (path: string) => !!state.intentEmptyFolders[path],
         search: () => runSearch({ state, runtime, timer }),
         stopSearch: () => runStopSearch({ state, runtime, timer }),
         clearSearchResults: () => clearSearchResults(state, runtime),

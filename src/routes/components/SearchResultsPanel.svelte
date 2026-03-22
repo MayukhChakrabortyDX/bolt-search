@@ -23,6 +23,7 @@
         rowIndentClass,
         displayPath,
         isFolderScanning,
+        isFolderEmpty,
         toggleDirectory,
         openInExplorer,
     }: {
@@ -37,7 +38,8 @@
         rowIndentClass: (depth: number, kind: "dir" | "file") => string;
         displayPath: (path: string) => string;
         isFolderScanning: (path: string) => boolean;
-        toggleDirectory: (path: string, depth: number) => void;
+        isFolderEmpty: (path: string) => boolean;
+        toggleDirectory: (path: string, depth: number) => void | Promise<void>;
         openInExplorer: (path: string) => Promise<void>;
     } = $props();
 </script>
@@ -168,6 +170,13 @@
                                     class="animate-spin text-emerald-600"
                                     strokeWidth={2}
                                 />
+                            {/if}
+                            {#if isFolderEmpty(row.node.path)}
+                                <span
+                                    class="inline-flex items-center rounded-md border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.04em] text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300"
+                                >
+                                    Empty
+                                </span>
                             {/if}
                             <span class="text-xs text-zinc-400 dark:text-zinc-500 truncate"
                                 >{displayPath(row.node.path)}</span

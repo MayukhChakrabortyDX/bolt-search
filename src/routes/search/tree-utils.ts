@@ -99,6 +99,7 @@ function mutableToTree(node: MutableTreeNode): TreeNode {
 export function buildResultTree(
     entries: FileEntry[],
     inFlightFolders: string[],
+    discoveredFolders: string[] = [],
 ): TreeNode[] {
     const roots = new Map<string, MutableTreeNode>();
 
@@ -109,6 +110,12 @@ export function buildResultTree(
     }
 
     for (const folder of inFlightFolders) {
+        const normalized = normalizePath(folder);
+        if (!normalized) continue;
+        insertPathIntoTree(roots, normalized, true);
+    }
+
+    for (const folder of discoveredFolders) {
         const normalized = normalizePath(folder);
         if (!normalized) continue;
         insertPathIntoTree(roots, normalized, true);
