@@ -1,6 +1,7 @@
 <script lang="ts">
     import { convertFileSrc, invoke } from "@tauri-apps/api/core";
     import { fade } from "svelte/transition";
+    import CustomContextMenu, { type ContextMenuItem } from "./CustomContextMenu.svelte";
     import {
         ArrowLeft,
         ChevronDown,
@@ -13,6 +14,10 @@
         LoaderCircle,
         X,
     } from "lucide-svelte";
+    import {
+        createFolderContextMenuController,
+        type FolderContextMenuAction,
+    } from "../search/context-menu-controller.svelte";
     import type { DriveScanRow, FileEntry, TreeNode, TreeRow } from "../search/page-types";
 
     type PreviewKind = "image" | "text" | "pdf" | "audio" | "video" | "unsupported";
@@ -93,6 +98,11 @@
     const canGoBackInFocus = $derived(
         layoutMode === "focus" && !!focusedFolderPath,
     );
+    const folderContextMenu = createFolderContextMenuController();
+    const folderContextMenuItems: ContextMenuItem[] = [
+        { id: "preview-folder", label: "Preview" },
+        { id: "open-in-explorer", label: "Open in Explorer" },
+    ];
 
     const IMAGE_EXTENSIONS = new Set([
         "png",
@@ -211,6 +221,21 @@
         }
     }
 
+    function openFolderContextMenu(event: MouseEvent, path: string, name: string): void {
+        folderContextMenu.open(event, { path, name });
+    }
+
+    async function onFolderContextMenuSelect(id: string): Promise<void> {
+        if (id !== "preview-folder" && id !== "open-in-explorer") {
+            return;
+        }
+
+        await folderContextMenu.select(id as FolderContextMenuAction, {
+            onPreviewFolder: ({ path, name }) => openFolderPreview(path, name),
+            onOpenInExplorer: ({ path }) => openInExplorer(path),
+        });
+    }
+
     async function openPreview(path: string, name: string): Promise<void> {
         previewModalOpen = true;
         previewTitle = name;
@@ -248,8 +273,16 @@
 
 <svelte:window
     onkeydown={(event) => {
-        if (event.key === "Escape" && previewModalOpen) {
-            closePreview();
+        if (event.key === "Escape") {
+            if (folderContextMenu.state.open) {
+                folderContextMenu.close();
+            }
+            if (previewModalOpen) {
+                closePreview();
+            }
+            if (folderPreviewModalOpen) {
+                closeFolderPreview();
+            }
         }
     }}
 />
@@ -361,6 +394,8 @@
                                     <button
                                         class="flex min-w-0 flex-1 items-center gap-2 text-left"
                                         onclick={() => toggleDirectory(row.node.path, row.depth)}
+                                        oncontextmenu={(event) =>
+                                            openFolderContextMenu(event, row.node.path, row.node.name)}
                                     >
                                         <span class="w-3 text-center text-xs text-zinc-500 dark:text-zinc-400">
                                             {#if row.hasChildren}
@@ -396,14 +431,6 @@
                                         <span class="text-xs text-zinc-400 dark:text-zinc-500 truncate"
                                             >{displayPath(row.node.path)}</span
                                         >
-                                    </button>
-                                    <button
-                                        class="shrink-0 inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-2 py-1 text-[11px] font-semibold text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-                                        onclick={() => openFolderPreview(row.node.path, row.node.name)}
-                                        aria-label={`Preview folder ${row.node.name}`}
-                                    >
-                                        <Eye size={11} strokeWidth={2} />
-                                        Preview
                                     </button>
                                 </div>
                             {:else}
@@ -469,6 +496,8 @@
                                             <button
                                                 class="flex min-w-0 flex-1 items-center gap-2 text-left"
                                                 onclick={() => focusFolder(entry.path)}
+                                                oncontextmenu={(event) =>
+                                                    openFolderContextMenu(event, entry.path, entry.name)}
                                             >
                                                 <Folder
                                                     size={14}
@@ -481,14 +510,6 @@
                                                 <span class="text-xs text-zinc-400 dark:text-zinc-500 truncate"
                                                     >{displayPath(entry.path)}</span
                                                 >
-                                            </button>
-                                            <button
-                                                class="shrink-0 inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-2 py-1 text-[11px] font-semibold text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-                                                onclick={() => openFolderPreview(entry.path, entry.name)}
-                                                aria-label={`Preview folder ${entry.name}`}
-                                            >
-                                                <Eye size={11} strokeWidth={2} />
-                                                Preview
                                             </button>
                                         </div>
                                     {:else}
@@ -541,6 +562,8 @@
                                 <button
                                     class="flex min-w-0 flex-1 items-center gap-2 text-left"
                                     onclick={() => toggleDirectory(row.node.path, row.depth)}
+                                    oncontextmenu={(event) =>
+                                        openFolderContextMenu(event, row.node.path, row.node.name)}
                                 >
                                     <span class="w-3 text-center text-xs text-zinc-500 dark:text-zinc-400">
                                         {#if row.hasChildren}
@@ -576,14 +599,6 @@
                                     <span class="text-xs text-zinc-400 dark:text-zinc-500 truncate"
                                         >{displayPath(row.node.path)}</span
                                     >
-                                </button>
-                                <button
-                                    class="shrink-0 inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-2 py-1 text-[11px] font-semibold text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-                                    onclick={() => openFolderPreview(row.node.path, row.node.name)}
-                                    aria-label={`Preview folder ${row.node.name}`}
-                                >
-                                    <Eye size={11} strokeWidth={2} />
-                                    Preview
                                 </button>
                             </div>
                         {:else}
@@ -623,6 +638,15 @@
         {/if}
     </div>
 </div>
+
+<CustomContextMenu
+    open={folderContextMenu.state.open}
+    x={folderContextMenu.state.x}
+    y={folderContextMenu.state.y}
+    items={folderContextMenuItems}
+    onSelect={onFolderContextMenuSelect}
+    onClose={() => folderContextMenu.close()}
+/>
 
 {#if previewModalOpen}
     <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
