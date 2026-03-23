@@ -1,5 +1,6 @@
 mod search;
 mod streaming;
+mod workspace;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -16,7 +17,12 @@ pub fn run() {
             streaming::search_with_progress,
             search::io_commands::open_in_explorer,
             search::io_commands::save_filter_file,
-            search::io_commands::load_filter_file
+            search::io_commands::load_filter_file,
+            workspace::commands::list_workspace_entries,
+            workspace::commands::read_workspace_file,
+            workspace::commands::write_workspace_file,
+            workspace::commands::create_workspace_entry,
+            workspace::commands::delete_workspace_entry
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
