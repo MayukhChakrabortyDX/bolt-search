@@ -137,18 +137,6 @@
                 <button
                     type="button"
                     class="rounded-full border px-2 py-1 text-[11px] font-semibold tracking-[0.01em] transition-colors {searchForm.kind ===
-                    'any'
-                        ? 'border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900'
-                        : 'border-zinc-300 bg-white text-zinc-600 hover:bg-zinc-50 hover:text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100'}"
-                    onclick={() => {
-                        searchForm.kind = "any";
-                    }}
-                >
-                    Any
-                </button>
-                <button
-                    type="button"
-                    class="rounded-full border px-2 py-1 text-[11px] font-semibold tracking-[0.01em] transition-colors {searchForm.kind ===
                     'file'
                         ? 'border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900'
                         : 'border-zinc-300 bg-white text-zinc-600 hover:bg-zinc-50 hover:text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100'}"

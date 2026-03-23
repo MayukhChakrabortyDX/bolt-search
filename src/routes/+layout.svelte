@@ -6,13 +6,13 @@
 	import ChipSelect from '../lib/components/ChipSelect.svelte';
     import { APP_REGISTRY } from "../apps/registry";
     import { globalState, isAppId, setActiveApp } from "../global.svelte";
+    import type { ExplorerLayoutMode } from '../apps/search/search/page-types';
 
 	const { children } = $props();
 	const appWindow = getCurrentWindow();
 	let isDarkMode = $state(false);
 	let streamingEnabled = $state(true);
 	let intentEnabled = $state(false);
-	type ExplorerLayoutMode = 'default' | 'focus';
 	let layoutMode = $state<ExplorerLayoutMode>('default');
 	let appPickerOpen = $state(false);
 	let dragRegionEl: HTMLDivElement | null = null;
@@ -26,6 +26,7 @@
 	const layoutModeOptions = [
 		{ value: 'default', label: 'Default' },
 		{ value: 'focus', label: 'Focus' },
+		{ value: 'group', label: 'Group' },
 	] as const;
 	const appTabOptions = APP_REGISTRY;
 
@@ -51,6 +52,10 @@
 	}
 
 	function syncIntentPreference(enabled: boolean) {
+		if (layoutMode === 'group' && enabled) {
+			syncModePreferences({ streaming: streamingEnabled, intent: false });
+			return;
+		}
 		syncModePreferences({ streaming: enabled ? false : streamingEnabled, intent: enabled });
  	}
 
@@ -74,6 +79,9 @@
 	}
 
 	function syncLayoutMode(next: ExplorerLayoutMode) {
+		if (next === 'group' && intentEnabled) {
+			syncModePreferences({ streaming: streamingEnabled, intent: false });
+		}
 		layoutMode = next;
 		localStorage.setItem('bolt-search-layout-mode', next);
 		window.dispatchEvent(
@@ -160,10 +168,13 @@
 		const storedIntent = localStorage.getItem('bolt-search-intent-enabled');
 		intentEnabled = storedIntent === '1' || storedIntent === 'true';
 		const storedLayoutMode = localStorage.getItem('bolt-search-layout-mode');
-		layoutMode = storedLayoutMode === 'focus' ? 'focus' : 'default';
+		layoutMode = storedLayoutMode === 'focus' || storedLayoutMode === 'group' ? storedLayoutMode : 'default';
 		const storedAppTab = localStorage.getItem('bolt-active-app-tab');
 		if (storedAppTab && isAppId(storedAppTab)) {
 			setActiveApp(storedAppTab);
+		}
+		if (layoutMode === 'group') {
+			intentEnabled = false;
 		}
 		if (intentEnabled) {
 			streamingEnabled = false;
@@ -202,6 +213,9 @@
 	}
 
 	function toggleIntentMode() {
+		if (layoutMode === 'group') {
+			return;
+		}
 		syncIntentPreference(!intentEnabled);
 	}
 
@@ -275,7 +289,7 @@
 						value={layoutMode}
 						options={layoutModeOptions}
 						onChange={(nextValue) => {
-							const nextMode = nextValue === 'focus' ? 'focus' : 'default';
+							const nextMode = nextValue === 'focus' || nextValue === 'group' ? nextValue : 'default';
 							syncLayoutMode(nextMode);
 						}}
 					/>
@@ -311,8 +325,13 @@
 				<button
 					class="window-control-button topbar-toggle"
 					type="button"
+					disabled={layoutMode === 'group'}
 					aria-label={intentEnabled ? 'Disable intent explorer mode' : 'Enable intent explorer mode'}
-					title={intentEnabled ? 'Intent explorer enabled' : 'Intent explorer disabled'}
+					title={layoutMode === 'group'
+						? 'Intent explorer unavailable in Group layout'
+						: intentEnabled
+							? 'Intent explorer enabled'
+							: 'Intent explorer disabled'}
 					onclick={toggleIntentMode}
 				>
 					<span class={`streaming-indicator ${intentEnabled ? 'on' : ''}`}></span>

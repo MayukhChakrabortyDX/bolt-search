@@ -10,7 +10,7 @@
         findTreeNodeByPath,
         flattenVisibleRows,
     } from "./search/tree-utils";
-    import type { DriveScanRow } from "./search/page-types";
+    import type { DriveScanRow, GroupedResultBucket } from "./search/page-types";
 
     const controller = createSearchController();
     const state = controller.state;
@@ -77,6 +77,37 @@
         }
 
         return resultTree;
+    });
+
+    function parentGroupLabel(path: string): string {
+        const normalized = path.replace(/\\/g, "/").replace(/\/+/g, "/");
+        const parts = normalized.split("/").filter(Boolean);
+        if (parts.length <= 1) {
+            return "/";
+        }
+        return parts.slice(0, -1).join("/");
+    }
+
+    const groupedBuckets = $derived.by(() => {
+        const buckets: GroupedResultBucket[] = [];
+        const byKey = new Map<string, GroupedResultBucket>();
+
+        for (const entry of state.results) {
+            const key = parentGroupLabel(entry.path);
+            let bucket = byKey.get(key);
+            if (!bucket) {
+                bucket = {
+                    key,
+                    label: key,
+                    entries: [],
+                };
+                byKey.set(key, bucket);
+                buckets.push(bucket);
+            }
+            bucket.entries.push(entry);
+        }
+
+        return buckets;
     });
 
     const driveScanTotal = $derived(
@@ -174,6 +205,7 @@
         isFolderEmpty={controller.isFolderEmpty}
         focusedFolderPath={focusTargetNode ? focusTargetNode.path : null}
         focusEntries={focusEntries}
+        groupedBuckets={groupedBuckets}
         toggleDirectory={controller.toggleDirectory}
         focusFolder={controller.focusFolder}
         openInExplorer={controller.openInExplorer}

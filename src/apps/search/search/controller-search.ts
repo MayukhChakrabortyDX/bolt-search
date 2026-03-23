@@ -207,7 +207,7 @@ export async function runSearch({
         state.driveScanCounts = slots.driveScanCounts;
         state.displayedDriveScanCounts = slots.displayedDriveScanCounts;
 
-        if (state.intentEnabled) {
+        if (state.intentEnabled && state.layoutMode !== "group") {
             const scopedQuery = createScopedQuery(formToFilters(state.searchForm));
             const batch = await invoke<FolderBatchResult>("search_folder_batch", {
                 query: scopedQuery,
