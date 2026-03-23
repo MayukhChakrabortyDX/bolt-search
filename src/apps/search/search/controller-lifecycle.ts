@@ -39,6 +39,10 @@ export function attachControllerLifecycle({
     const onIntentModeChange = (event: Event) => {
         const customEvent = event as CustomEvent<{ enabled?: unknown }>;
         if (typeof customEvent.detail?.enabled === "boolean") {
+            if (state.layoutMode === "group" && customEvent.detail.enabled) {
+                state.intentEnabled = false;
+                return;
+            }
             state.intentEnabled = customEvent.detail.enabled;
             if (state.intentEnabled) {
                 state.streamingEnabled = false;
@@ -47,7 +51,12 @@ export function attachControllerLifecycle({
     };
     const onLayoutModeChange = (event: Event) => {
         const customEvent = event as CustomEvent<{ mode?: unknown }>;
-        state.layoutMode = customEvent.detail?.mode === "focus" ? "focus" : "default";
+        const mode = customEvent.detail?.mode;
+        state.layoutMode =
+            mode === "focus" || mode === "group" ? mode : "default";
+        if (state.layoutMode === "group") {
+            state.intentEnabled = false;
+        }
     };
 
     window.addEventListener("bolt-save-filter", onSave);
@@ -92,7 +101,13 @@ export function attachControllerLifecycle({
         state.streamingEnabled = false;
     }
     const storedLayoutMode = localStorage.getItem("bolt-search-layout-mode");
-    state.layoutMode = storedLayoutMode === "focus" ? "focus" : "default";
+    state.layoutMode =
+        storedLayoutMode === "focus" || storedLayoutMode === "group"
+            ? storedLayoutMode
+            : "default";
+    if (state.layoutMode === "group") {
+        state.intentEnabled = false;
+    }
 
     void (async () => {
         try {

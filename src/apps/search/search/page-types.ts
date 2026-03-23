@@ -69,6 +69,7 @@ export type ScopedQuery = {
 };
 
 export type SearchRunMode = "streaming" | "batch" | null;
+export type ExplorerLayoutMode = "default" | "focus" | "group";
 
 export type TreeNode = {
     name: string;
@@ -90,8 +91,14 @@ export type DriveScanRow = {
     active: boolean;
 };
 
+export type GroupedResultBucket = {
+    key: string;
+    label: string;
+    entries: FileEntry[];
+};
+
 export type SearchScopeMode = "all" | "drive" | "folder";
-export type SearchKind = "any" | "file" | "folder";
+export type SearchKind = "file" | "folder";
 
 export type SearchFormState = {
     query: string;
@@ -150,7 +157,7 @@ export function createDefaultSearchForm(): SearchFormState {
         scopeMode: "all",
         scopeDrive: "ALL",
         scopeFolders: [],
-        kind: "any",
+        kind: "file",
         includeHidden: false,
         readonlyOnly: false,
         sizeMin: "",

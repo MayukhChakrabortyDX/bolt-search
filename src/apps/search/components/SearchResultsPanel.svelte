@@ -20,10 +20,16 @@
         type FileContextMenuAction,
         type FolderContextMenuAction,
     } from "../search/context-menu-controller.svelte";
-    import type { DriveScanRow, FileEntry, TreeNode, TreeRow } from "../search/page-types";
+    import type {
+        DriveScanRow,
+        ExplorerLayoutMode,
+        FileEntry,
+        GroupedResultBucket,
+        TreeNode,
+        TreeRow,
+    } from "../search/page-types";
 
     type PreviewKind = "image" | "text" | "pdf" | "audio" | "video" | "unsupported";
-    type ExplorerLayoutMode = "default" | "focus";
     type FolderPreviewResult = {
         entries: FileEntry[];
         next_folders: string[];
@@ -46,6 +52,7 @@
         isFolderEmpty,
         focusedFolderPath,
         focusEntries,
+        groupedBuckets,
         toggleDirectory,
         focusFolder,
         openInExplorer,
@@ -65,6 +72,7 @@
         isFolderEmpty: (path: string) => boolean;
         focusedFolderPath: string | null;
         focusEntries: TreeNode[];
+        groupedBuckets: GroupedResultBucket[];
         toggleDirectory: (path: string, depth: number) => void | Promise<void>;
         focusFolder: (path: string | null) => void | Promise<void>;
         openInExplorer: (path: string) => Promise<void>;
@@ -572,85 +580,153 @@
                     </div>
                 </div>
             {:else}
-                <div
-                    class="h-full rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 overflow-auto"
-                    transition:fade={{ duration: 220 }}
-                >
-                    {#each treeRows as row (row.node.path)}
-                        {#if row.node.isDir}
-                            <div
-                                class="w-full flex items-center gap-2 py-2 pr-3 text-left border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/70 {rowIndentClass(row.depth, 'dir')}"
-                                title={displayPath(row.node.path)}
-                            >
-                                <button
-                                    class="flex min-w-0 flex-1 items-center gap-2 text-left"
-                                    onclick={() => toggleDirectory(row.node.path, row.depth)}
-                                    oncontextmenu={(event) =>
-                                        openFolderContextMenu(event, row.node.path, row.node.name)}
-                                >
-                                    <span class="w-3 text-center text-xs text-zinc-500 dark:text-zinc-400">
-                                        {#if row.hasChildren}
-                                            {#if row.isOpen}
-                                                <ChevronDown size={12} strokeWidth={2} />
-                                            {:else}
-                                                <ChevronRight size={12} strokeWidth={2} />
-                                            {/if}
-                                        {/if}
-                                    </span>
-                                    <Folder
-                                        size={14}
-                                        class="text-zinc-500 dark:text-zinc-400"
-                                        strokeWidth={2}
-                                    />
-                                    <span class="text-xs text-zinc-700 dark:text-zinc-100 font-medium"
-                                        >{row.node.name}</span
-                                    >
-                                    {#if isFolderScanning(row.node.path)}
-                                        <LoaderCircle
-                                            size={12}
-                                            class="animate-spin text-emerald-600"
-                                            strokeWidth={2}
-                                        />
-                                    {/if}
-                                    {#if isFolderEmpty(row.node.path)}
-                                        <span
-                                            class="inline-flex items-center rounded-md border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.04em] text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300"
-                                        >
-                                            Empty
-                                        </span>
-                                    {/if}
-                                    <span class="text-xs text-zinc-400 dark:text-zinc-500 truncate"
-                                        >{displayPath(row.node.path)}</span
-                                    >
-                                </button>
+                {#if layoutMode === "group"}
+                    <div
+                        class="h-full rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 overflow-auto"
+                        transition:fade={{ duration: 220 }}
+                    >
+                        {#if groupedBuckets.length === 0}
+                            <div class="h-full flex items-center justify-center">
+                                <span class="text-xs text-zinc-400 dark:text-zinc-500">
+                                    No grouped results yet.
+                                </span>
                             </div>
                         {:else}
-                            <div
-                                class="w-full flex items-center gap-2 py-2 pr-3 text-left border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/70 {rowIndentClass(row.depth, 'file')}"
-                                title={displayPath(row.node.path)}
-                            >
-                                <button
-                                    class="flex min-w-0 flex-1 items-center gap-2 text-left"
-                                    onclick={() => openInExplorer(row.node.path)}
-                                    oncontextmenu={(event) =>
-                                        openFileContextMenu(event, row.node.path, row.node.name)}
-                                >
-                                    <File
-                                        size={14}
-                                        class="text-zinc-500 dark:text-zinc-400 shrink-0"
-                                        strokeWidth={2}
-                                    />
-                                    <span class="text-xs text-zinc-700 dark:text-zinc-100 font-medium"
-                                        >{row.node.name}</span
-                                    >
-                                    <span class="text-xs text-zinc-400 dark:text-zinc-500 truncate"
-                                        >{displayPath(row.node.path)}</span
-                                    >
-                                </button>
-                            </div>
+                            {#each groupedBuckets as bucket (bucket.key)}
+                                <section class="border-b border-zinc-100 dark:border-zinc-800">
+                                    <div class="sticky top-0 z-10 flex items-center justify-between gap-2 bg-zinc-100/95 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.04em] text-zinc-500 dark:bg-zinc-900/95 dark:text-zinc-400">
+                                        <span class="truncate">{displayPath(bucket.label)}</span>
+                                        <span>{bucket.entries.length}</span>
+                                    </div>
+
+                                    {#each bucket.entries as entry (entry.path)}
+                                        {#if entry.is_dir}
+                                            <button
+                                                class="w-full flex items-center gap-2 py-2 px-3 text-left border-t border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/70"
+                                                onclick={() => openInExplorer(entry.path)}
+                                                oncontextmenu={(event) =>
+                                                    openFolderContextMenu(event, entry.path, entry.name)}
+                                                title={displayPath(entry.path)}
+                                            >
+                                                <Folder
+                                                    size={14}
+                                                    class="text-zinc-500 dark:text-zinc-400 shrink-0"
+                                                    strokeWidth={2}
+                                                />
+                                                <span class="text-xs text-zinc-700 dark:text-zinc-100 font-medium"
+                                                    >{entry.name}</span
+                                                >
+                                                <span class="text-xs text-zinc-400 dark:text-zinc-500 truncate"
+                                                    >{displayPath(entry.path)}</span
+                                                >
+                                            </button>
+                                        {:else}
+                                            <button
+                                                class="w-full flex items-center gap-2 py-2 px-3 text-left border-t border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/70"
+                                                onclick={() => openInExplorer(entry.path)}
+                                                oncontextmenu={(event) =>
+                                                    openFileContextMenu(event, entry.path, entry.name)}
+                                                title={displayPath(entry.path)}
+                                            >
+                                                <File
+                                                    size={14}
+                                                    class="text-zinc-500 dark:text-zinc-400 shrink-0"
+                                                    strokeWidth={2}
+                                                />
+                                                <span class="text-xs text-zinc-700 dark:text-zinc-100 font-medium"
+                                                    >{entry.name}</span
+                                                >
+                                                <span class="text-xs text-zinc-400 dark:text-zinc-500 truncate"
+                                                    >{displayPath(entry.path)}</span
+                                                >
+                                            </button>
+                                        {/if}
+                                    {/each}
+                                </section>
+                            {/each}
                         {/if}
-                    {/each}
-                </div>
+                    </div>
+                {:else}
+                    <div
+                        class="h-full rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 overflow-auto"
+                        transition:fade={{ duration: 220 }}
+                    >
+                        {#each treeRows as row (row.node.path)}
+                            {#if row.node.isDir}
+                                <div
+                                    class="w-full flex items-center gap-2 py-2 pr-3 text-left border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/70 {rowIndentClass(row.depth, 'dir')}"
+                                    title={displayPath(row.node.path)}
+                                >
+                                    <button
+                                        class="flex min-w-0 flex-1 items-center gap-2 text-left"
+                                        onclick={() => toggleDirectory(row.node.path, row.depth)}
+                                        oncontextmenu={(event) =>
+                                            openFolderContextMenu(event, row.node.path, row.node.name)}
+                                    >
+                                        <span class="w-3 text-center text-xs text-zinc-500 dark:text-zinc-400">
+                                            {#if row.hasChildren}
+                                                {#if row.isOpen}
+                                                    <ChevronDown size={12} strokeWidth={2} />
+                                                {:else}
+                                                    <ChevronRight size={12} strokeWidth={2} />
+                                                {/if}
+                                            {/if}
+                                        </span>
+                                        <Folder
+                                            size={14}
+                                            class="text-zinc-500 dark:text-zinc-400"
+                                            strokeWidth={2}
+                                        />
+                                        <span class="text-xs text-zinc-700 dark:text-zinc-100 font-medium"
+                                            >{row.node.name}</span
+                                        >
+                                        {#if isFolderScanning(row.node.path)}
+                                            <LoaderCircle
+                                                size={12}
+                                                class="animate-spin text-emerald-600"
+                                                strokeWidth={2}
+                                            />
+                                        {/if}
+                                        {#if isFolderEmpty(row.node.path)}
+                                            <span
+                                                class="inline-flex items-center rounded-md border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.04em] text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300"
+                                            >
+                                                Empty
+                                            </span>
+                                        {/if}
+                                        <span class="text-xs text-zinc-400 dark:text-zinc-500 truncate"
+                                            >{displayPath(row.node.path)}</span
+                                        >
+                                    </button>
+                                </div>
+                            {:else}
+                                <div
+                                    class="w-full flex items-center gap-2 py-2 pr-3 text-left border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/70 {rowIndentClass(row.depth, 'file')}"
+                                    title={displayPath(row.node.path)}
+                                >
+                                    <button
+                                        class="flex min-w-0 flex-1 items-center gap-2 text-left"
+                                        onclick={() => openInExplorer(row.node.path)}
+                                        oncontextmenu={(event) =>
+                                            openFileContextMenu(event, row.node.path, row.node.name)}
+                                    >
+                                        <File
+                                            size={14}
+                                            class="text-zinc-500 dark:text-zinc-400 shrink-0"
+                                            strokeWidth={2}
+                                        />
+                                        <span class="text-xs text-zinc-700 dark:text-zinc-100 font-medium"
+                                            >{row.node.name}</span
+                                        >
+                                        <span class="text-xs text-zinc-400 dark:text-zinc-500 truncate"
+                                            >{displayPath(row.node.path)}</span
+                                        >
+                                    </button>
+                                </div>
+                            {/if}
+                        {/each}
+                    </div>
+                {/if}
             {/if}
         {/if}
     </div>

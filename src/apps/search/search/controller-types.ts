@@ -1,6 +1,9 @@
-import type { FileEntry, SearchFormState, SearchRunMode } from "./page-types";
-
-export type ExplorerLayoutMode = "default" | "focus";
+import type {
+    ExplorerLayoutMode,
+    FileEntry,
+    SearchFormState,
+    SearchRunMode,
+} from "./page-types";
 
 export type SearchControllerState = {
     searchForm: SearchFormState;
