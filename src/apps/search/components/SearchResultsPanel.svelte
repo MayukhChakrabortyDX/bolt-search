@@ -15,7 +15,9 @@
         X,
     } from "lucide-svelte";
     import {
+        createFileContextMenuController,
         createFolderContextMenuController,
+        type FileContextMenuAction,
         type FolderContextMenuAction,
     } from "../search/context-menu-controller.svelte";
     import type { DriveScanRow, FileEntry, TreeNode, TreeRow } from "../search/page-types";
@@ -101,6 +103,11 @@
     const folderContextMenu = createFolderContextMenuController();
     const folderContextMenuItems: ContextMenuItem[] = [
         { id: "preview-folder", label: "Preview" },
+        { id: "open-in-explorer", label: "Open in Explorer" },
+    ];
+    const fileContextMenu = createFileContextMenuController();
+    const fileContextMenuItems: ContextMenuItem[] = [
+        { id: "preview-file", label: "Preview" },
         { id: "open-in-explorer", label: "Open in Explorer" },
     ];
 
@@ -222,6 +229,7 @@
     }
 
     function openFolderContextMenu(event: MouseEvent, path: string, name: string): void {
+        fileContextMenu.close();
         folderContextMenu.open(event, { path, name });
     }
 
@@ -232,6 +240,22 @@
 
         await folderContextMenu.select(id as FolderContextMenuAction, {
             onPreviewFolder: ({ path, name }) => openFolderPreview(path, name),
+            onOpenInExplorer: ({ path }) => openInExplorer(path),
+        });
+    }
+
+    function openFileContextMenu(event: MouseEvent, path: string, name: string): void {
+        folderContextMenu.close();
+        fileContextMenu.open(event, { path, name });
+    }
+
+    async function onFileContextMenuSelect(id: string): Promise<void> {
+        if (id !== "preview-file" && id !== "open-in-explorer") {
+            return;
+        }
+
+        await fileContextMenu.select(id as FileContextMenuAction, {
+            onPreviewFile: ({ path, name }) => openPreview(path, name),
             onOpenInExplorer: ({ path }) => openInExplorer(path),
         });
     }
@@ -276,6 +300,9 @@
         if (event.key === "Escape") {
             if (folderContextMenu.state.open) {
                 folderContextMenu.close();
+            }
+            if (fileContextMenu.state.open) {
+                fileContextMenu.close();
             }
             if (previewModalOpen) {
                 closePreview();
@@ -437,6 +464,8 @@
                                 <button
                                     class="w-full flex items-center gap-2 py-2 pr-3 text-left border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/70 {rowIndentClass(row.depth, 'file')}"
                                     onclick={() => openInExplorer(row.node.path)}
+                                    oncontextmenu={(event) =>
+                                        openFileContextMenu(event, row.node.path, row.node.name)}
                                     title={displayPath(row.node.path)}
                                 >
                                     <File
@@ -520,6 +549,8 @@
                                             <button
                                                 class="flex min-w-0 flex-1 items-center gap-2 text-left"
                                                 onclick={() => openInExplorer(entry.path)}
+                                                oncontextmenu={(event) =>
+                                                    openFileContextMenu(event, entry.path, entry.name)}
                                             >
                                                 <File
                                                     size={14}
@@ -532,14 +563,6 @@
                                                 <span class="text-xs text-zinc-400 dark:text-zinc-500 truncate"
                                                     >{displayPath(entry.path)}</span
                                                 >
-                                            </button>
-                                            <button
-                                                class="shrink-0 inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-2 py-1 text-[11px] font-semibold text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-                                                onclick={() => openPreview(entry.path, entry.name)}
-                                                aria-label={`Preview ${entry.name}`}
-                                            >
-                                                <Eye size={11} strokeWidth={2} />
-                                                Preview
                                             </button>
                                         </div>
                                     {/if}
@@ -609,6 +632,8 @@
                                 <button
                                     class="flex min-w-0 flex-1 items-center gap-2 text-left"
                                     onclick={() => openInExplorer(row.node.path)}
+                                    oncontextmenu={(event) =>
+                                        openFileContextMenu(event, row.node.path, row.node.name)}
                                 >
                                     <File
                                         size={14}
@@ -621,14 +646,6 @@
                                     <span class="text-xs text-zinc-400 dark:text-zinc-500 truncate"
                                         >{displayPath(row.node.path)}</span
                                     >
-                                </button>
-                                <button
-                                    class="shrink-0 inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-2 py-1 text-[11px] font-semibold text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-                                    onclick={() => openPreview(row.node.path, row.node.name)}
-                                    aria-label={`Preview ${row.node.name}`}
-                                >
-                                    <Eye size={11} strokeWidth={2} />
-                                    Preview
                                 </button>
                             </div>
                         {/if}
@@ -646,6 +663,15 @@
     items={folderContextMenuItems}
     onSelect={onFolderContextMenuSelect}
     onClose={() => folderContextMenu.close()}
+/>
+
+<CustomContextMenu
+    open={fileContextMenu.state.open}
+    x={fileContextMenu.state.x}
+    y={fileContextMenu.state.y}
+    items={fileContextMenuItems}
+    onSelect={onFileContextMenuSelect}
+    onClose={() => fileContextMenu.close()}
 />
 
 {#if previewModalOpen}
