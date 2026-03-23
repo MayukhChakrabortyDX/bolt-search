@@ -17,6 +17,9 @@
 	let appPickerOpen = $state(false);
 	let dragRegionEl: HTMLDivElement | null = null;
 	const isSearchAppActive = $derived(globalState.activeApp === 'search');
+	const windowTitle = $derived(
+		globalState.activeApp === 'workspace' ? 'Bolt Workspace Software' : 'Bolt Search Software'
+	);
 	type ThemePreference = 'system' | 'light' | 'dark';
 	let themePreference: ThemePreference = 'system';
 	let themeMediaQuery: MediaQueryList | null = null;
@@ -133,6 +136,9 @@
 		};
 
 		window.addEventListener('bolt-ui-ready', onUiReady, { once: true });
+
+		// Fallback for app modes that don't emit bolt-ui-ready during startup.
+		showWindowOnce();
 
 		themeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
 		const stored = localStorage.getItem('bolt-search-theme-preference');
@@ -257,7 +263,7 @@
 			</div>
 
 			<div class="window-drag-region" data-tauri-drag-region bind:this={dragRegionEl}>
-				<span class="window-title">Bolt Search Software</span>
+				<span class="window-title">{windowTitle}</span>
 			</div>
 		</div>
 		<div class="window-controls">
