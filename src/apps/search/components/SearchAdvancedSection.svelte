@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { ChevronDown, FolderPlus, X } from "lucide-svelte";
+    import { SlidersHorizontal, FolderPlus, X } from "lucide-svelte";
     import ChipSelect from "../../../lib/components/ChipSelect.svelte";
     import CalendarField from "../../../lib/components/CalendarField.svelte";
     import AppModal from "../../../lib/components/ui/AppModal.svelte";
@@ -46,23 +46,42 @@
     function clearExcludedFolders() {
         searchForm.excludedFolders = [];
     }
+
+    function closeAdvancedModal() {
+        if (showAdvanced) {
+            onToggleAdvanced();
+        }
+    }
+
+    $effect(() => {
+        if (!showAdvanced && excludedModalOpen) {
+            excludedModalOpen = false;
+        }
+    });
 </script>
 
 <section class="flex flex-col gap-2 rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 p-3">
     <button
         type="button"
-        class="flex w-full items-center justify-between text-zinc-500 dark:text-zinc-300"
+        class="inline-flex items-center justify-center gap-2 rounded-md border border-zinc-300 bg-white px-2 py-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
         onclick={onToggleAdvanced}
     >
-        <span class="text-xs font-semibold tracking-[0.02em] text-zinc-700 dark:text-zinc-200">Advanced</span>
-        <ChevronDown
-            size={14}
-            strokeWidth={2}
-            class={showAdvanced ? "" : "rotate-[-90deg]"}
-        />
+        <SlidersHorizontal size={14} strokeWidth={2} />
+        Advanced Filters
     </button>
 
-    {#if showAdvanced}
+    <p class="text-[11px] text-zinc-500 dark:text-zinc-400">
+        Open modal to edit extension, path, date, size and excluded-folder filters.
+    </p>
+</section>
+
+<AppModal
+    open={showAdvanced}
+    title="Advanced Filters"
+    onClose={closeAdvancedModal}
+    class="max-w-4xl"
+>
+    <div class="grid gap-3">
         <div class="grid gap-2">
             <label class="text-[10px] font-semibold uppercase tracking-[0.07em] text-zinc-400 dark:text-zinc-500" for="ext-input">
                 Extensions
@@ -217,8 +236,18 @@
                 />
             </div>
         </div>
-    {/if}
-</section>
+
+        <div class="flex justify-end">
+            <button
+                type="button"
+                class="rounded-md border border-zinc-300 px-2.5 py-1.5 text-[11px] font-semibold text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                onclick={closeAdvancedModal}
+            >
+                Done
+            </button>
+        </div>
+    </div>
+</AppModal>
 
 <AppModal
     open={excludedModalOpen}
