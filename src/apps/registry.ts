@@ -1,4 +1,3 @@
-import WorkspaceApp from "./workspace/WorkspaceApp.svelte";
 import SearchApp from "./search/SearchApp.svelte";
 import { type AppId, isAppId } from "../global.svelte";
 import type { Component } from "svelte";
@@ -12,13 +11,6 @@ export type RegisteredAppDefinition = {
 };
 
 export const APP_REGISTRY: ReadonlyArray<RegisteredAppDefinition> = [
-    {
-        id: "workspace",
-        label: "Workspace",
-        description: "Create and open focused workspaces",
-        available: true,
-        component: WorkspaceApp,
-    },
     {
         id: "search",
         label: "Search",

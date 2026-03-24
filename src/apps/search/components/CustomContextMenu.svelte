@@ -1,8 +1,12 @@
 <script lang="ts">
+    import { tick } from "svelte";
+
     export type ContextMenuItem = {
         id: string;
         label: string;
     };
+
+    const VIEWPORT_PADDING = 8;
 
     let {
         open,
@@ -19,7 +23,44 @@
         onSelect: (id: string) => void | Promise<void>;
         onClose: () => void;
     } = $props();
+
+    let menuEl = $state<HTMLDivElement | null>(null);
+    let menuX = $state(0);
+    let menuY = $state(0);
+
+    function clampToViewport(nextX: number, nextY: number): { x: number; y: number } {
+        const width = menuEl?.offsetWidth ?? 0;
+        const height = menuEl?.offsetHeight ?? 0;
+        const maxX = Math.max(VIEWPORT_PADDING, window.innerWidth - width - VIEWPORT_PADDING);
+        const maxY = Math.max(VIEWPORT_PADDING, window.innerHeight - height - VIEWPORT_PADDING);
+
+        return {
+            x: Math.min(Math.max(nextX, VIEWPORT_PADDING), maxX),
+            y: Math.min(Math.max(nextY, VIEWPORT_PADDING), maxY),
+        };
+    }
+
+    async function updateMenuPosition(): Promise<void> {
+        if (!open) {
+            return;
+        }
+
+        await tick();
+        const next = clampToViewport(x, y);
+        menuX = next.x;
+        menuY = next.y;
+    }
+
+    $effect(() => {
+        if (!open) {
+            return;
+        }
+
+        void updateMenuPosition();
+    });
 </script>
+
+<svelte:window onresize={() => void updateMenuPosition()} />
 
 {#if open}
     <button
@@ -33,8 +74,9 @@
     ></button>
 
     <div
+        bind:this={menuEl}
         class="fixed z-50 min-w-52 rounded-lg border border-zinc-200 bg-white p-1 shadow-xl dark:border-zinc-700 dark:bg-zinc-900"
-        style={`left: ${x}px; top: ${y}px;`}
+        style={`left: ${menuX}px; top: ${menuY}px;`}
         role="menu"
         tabindex={-1}
         oncontextmenu={(event) => event.preventDefault()}

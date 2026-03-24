@@ -154,8 +154,21 @@ pub(crate) fn prepare_filters(filters: &[Filter]) -> PreparedFilters {
     let created_after = merge_lower_bound(created_after, created_range_start);
     let created_before = merge_upper_bound(created_before, created_range_end);
 
-    let file_only = filters.iter().any(|f| f.kind == "file_only");
-    let folder_only = filters.iter().any(|f| f.kind == "folder_only");
+    let mut file_only = false;
+    let mut folder_only = false;
+    for filter in filters {
+        match filter.kind.as_str() {
+            "file_only" => {
+                file_only = true;
+                folder_only = false;
+            }
+            "folder_only" => {
+                folder_only = true;
+                file_only = false;
+            }
+            _ => {}
+        }
+    }
     let hidden = filters.iter().any(|f| f.kind == "hidden");
     let readonly = filters.iter().any(|f| f.kind == "readonly");
 
@@ -179,4 +192,33 @@ pub(crate) fn prepare_filters(filters: &[Filter]) -> PreparedFilters {
 
     prepared.stage_order = build_filter_stage_order(&prepared);
     prepared
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prepare_filters;
+    use crate::search::types::Filter;
+
+    fn mk_filter(kind: &str) -> Filter {
+        Filter {
+            kind: kind.to_string(),
+            value: None,
+            value2: None,
+            unit: None,
+        }
+    }
+
+    #[test]
+    fn entry_kind_last_filter_wins_file_only() {
+        let prepared = prepare_filters(&[mk_filter("folder_only"), mk_filter("file_only")]);
+        assert!(prepared.file_only);
+        assert!(!prepared.folder_only);
+    }
+
+    #[test]
+    fn entry_kind_last_filter_wins_folder_only() {
+        let prepared = prepare_filters(&[mk_filter("file_only"), mk_filter("folder_only")]);
+        assert!(prepared.folder_only);
+        assert!(!prepared.file_only);
+    }
 }

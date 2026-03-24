@@ -17,8 +17,8 @@
 	let appPickerOpen = $state(false);
 	let dragRegionEl: HTMLDivElement | null = null;
 	const isSearchAppActive = $derived(globalState.activeApp === 'search');
-	const windowTitle = $derived(
-		globalState.activeApp === 'workspace' ? 'Bolt Workspace Software' : 'Bolt Search Software'
+	const appPickerTitle = $derived(
+		globalState.activeApp === 'search' ? 'Bolt Search App' : 'App'
 	);
 	type ThemePreference = 'system' | 'light' | 'dark';
 	let themePreference: ThemePreference = 'system';
@@ -223,6 +223,7 @@
 		if (event.button !== 0) return;
 		const target = event.target as HTMLElement | null;
 		if (target?.closest('.window-controls')) return;
+		if (target?.closest('.window-app-launcher')) return;
 
 		try {
 			await appWindow.startDragging();
@@ -263,21 +264,20 @@
 <div class="app-shell">
 	<header class="window-titlebar" data-tauri-drag-region>
 		<div class="window-left-group">
-			<div class="window-app-selector" aria-label="Application selector">
-				<button
-					class="window-app-selector-button"
-					type="button"
-					onclick={openAppPicker}
-					aria-label="Open app picker"
-					title="Open app picker"
-				>
+			<button
+				class="window-app-launcher"
+				type="button"
+				onclick={openAppPicker}
+				aria-label="Open app picker"
+				title="Click to select app"
+			>
+				<span class="window-app-launcher-label">{appPickerTitle}</span>
+				<span class="window-app-launcher-icon">
 					<Grid3X3 size={13} strokeWidth={2} />
-					<span>{appTabOptions.find((option) => option.id === globalState.activeApp)?.label ?? 'App'}</span>
-				</button>
-			</div>
+				</span>
+			</button>
 
 			<div class="window-drag-region" data-tauri-drag-region bind:this={dragRegionEl}>
-				<span class="window-title">{windowTitle}</span>
 			</div>
 		</div>
 		<div class="window-controls">

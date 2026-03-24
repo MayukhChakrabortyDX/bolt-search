@@ -129,38 +129,49 @@ html[data-theme='dark'] .app-shell {
     align-items: stretch;
 }
 
-.window-app-selector {
+.window-app-launcher {
+    height: 100%;
+    min-width: 270px;
+    max-width: 340px;
+    border: none;
+    border-right: 1px solid var(--stroke);
+    background: transparent;
+    color: var(--control-text);
     display: inline-flex;
     align-items: center;
-    justify-content: center;
-    height: 100%;
-    min-width: 128px;
-    padding: 0 10px;
-    border-right: 1px solid var(--stroke);
+    justify-content: space-between;
+    padding: 0 12px 0 14px;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
 }
 
-.window-app-selector-chip {
-    min-width: 110px;
+.window-app-launcher:hover {
+    background: var(--panel-soft);
 }
 
-.window-app-selector-button {
+.window-app-launcher-label {
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: var(--text-muted);
+    text-transform: uppercase;
+}
+
+.window-app-launcher-icon {
     height: 28px;
-    min-width: 112px;
+    min-width: 30px;
     border-radius: 7px;
     border: 1px solid var(--control-border);
     background: var(--control-bg);
     color: var(--control-text);
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 0 10px;
-    font-size: 0.72rem;
-    font-weight: 600;
-    cursor: pointer;
+    justify-content: center;
+    padding: 0 8px;
     transition: background-color 0.15s ease, border-color 0.15s ease;
 }
 
-.window-app-selector-button:hover {
+.window-app-launcher:hover .window-app-launcher-icon {
     background: var(--control-bg-hover);
 }
 
@@ -291,22 +302,6 @@ html[data-theme='dark'] .window-titlebar {
 
 .window-drag-region:active {
     cursor: grabbing;
-}
-
-.window-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--accent);
-    box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.15);
-}
-
-.window-title {
-    font-size: 0.8rem;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--text-muted);
 }
 
 .window-controls {

@@ -1,7 +1,7 @@
 export type AppId = "workspace" | "search";
 
 export const globalState = $state({
-    activeApp: "workspace" as AppId,
+    activeApp: "search" as AppId,
 });
 
 export function isAppId(value: string): value is AppId {
