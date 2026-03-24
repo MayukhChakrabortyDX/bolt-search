@@ -34,7 +34,7 @@ import type {
 function createInitialState(): SearchControllerState {
     return {
         searchForm: createDefaultSearchForm(),
-        showAdvanced: true,
+        showAdvanced: false,
         enforceFolderScopeValidation: false,
         results: [],
         searching: false,

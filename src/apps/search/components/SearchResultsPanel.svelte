@@ -456,11 +456,11 @@
                             {#each treeRows as row (row.node.path)}
                                 {#if row.node.isDir}
                                     <div
-                                        class="w-full overflow-hidden flex items-center gap-2 py-2 pr-3 text-left border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/70 {rowIndentClass(row.depth, 'dir')}"
+                                        class="w-full overflow-hidden flex items-center gap-2 text-left border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/70"
                                         title={displayPath(row.node.path)}
                                     >
                                         <button
-                                            class="w-full flex min-w-0 flex-1 items-center gap-2 text-left"
+                                            class="w-full {rowIndentClass(row.depth, 'dir')} flex min-w-0 flex-1 items-center py-2 gap-2 text-left"
                                             onclick={() => onFolderRowClick(row.node.path, row.depth)}
                                             oncontextmenu={(event) =>
                                                 openFolderContextMenu(event, row.node.path, row.node.name)}
@@ -504,7 +504,8 @@
                                 {:else}
                                     <button
                                         class="w-full overflow-hidden flex items-center gap-2 py-2 pr-3 text-left border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/70 {rowIndentClass(row.depth, 'file')}"
-                                        onclick={() => onFileRowClick(row.node.path)}
+                                        onclick={(event) =>
+                                            openFileContextMenu(event, row.node.path, row.node.name)}
                                         oncontextmenu={(event) =>
                                             openFileContextMenu(event, row.node.path, row.node.name)}
                                         title={displayPath(row.node.path)}
@@ -551,9 +552,6 @@
                         </div>
 
                         <div class="min-h-0 flex-1 overflow-auto">
-                            <div class="sticky top-0 z-10 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50/95 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.04em] text-zinc-500 dark:bg-zinc-900/95 dark:text-zinc-400">
-                                Items in {focusedFolderPath ? displayPath(focusedFolderPath) : "Top level"}
-                            </div>
                             {#if filteredFocusEntries.length === 0}
                                 <div class="h-full flex items-center justify-center">
                                     <span class="text-xs text-zinc-400 dark:text-zinc-500">
@@ -564,11 +562,11 @@
                                 {#each filteredFocusEntries as entry (entry.path)}
                                     {#if entry.isDir}
                                         <div
-                                            class="w-full overflow-hidden flex items-center gap-2 py-2 px-3 text-left border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/70"
+                                            class="w-full overflow-hidden flex items-center gap-2 text-left border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/70"
                                             title={displayPath(entry.path)}
                                         >
                                             <button
-                                                class="w-full flex min-w-0 flex-1 items-center gap-2 text-left"
+                                                class="w-full flex min-w-0 flex-1 items-center gap-2 text-left py-2 px-3"
                                                 onclick={() => onFocusFolderClick(entry.path)}
                                                 oncontextmenu={(event) =>
                                                     openFolderContextMenu(event, entry.path, entry.name)}
@@ -588,12 +586,13 @@
                                         </div>
                                     {:else}
                                         <div
-                                            class="w-full overflow-hidden flex items-center gap-2 py-2 px-3 text-left border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/70"
+                                            class="w-full overflow-hidden flex items-center gap-2 text-left border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/70"
                                             title={displayPath(entry.path)}
                                         >
                                             <button
-                                                class="w-full flex min-w-0 flex-1 items-center gap-2 text-left"
-                                                onclick={() => onFileRowClick(entry.path)}
+                                                class="w-full flex min-w-0 flex-1 items-center gap-2 py-2 px-3 text-left"
+                                                onclick={(event) =>
+                                                    openFileContextMenu(event, entry.path, entry.name)}
                                                 oncontextmenu={(event) =>
                                                     openFileContextMenu(event, entry.path, entry.name)}
                                             >
@@ -691,11 +690,11 @@
                         {#each treeRows as row (row.node.path)}
                             {#if row.node.isDir}
                                 <div
-                                    class="w-full overflow-hidden flex items-center gap-2 py-2 pr-3 text-left border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/70 {rowIndentClass(row.depth, 'dir')}"
+                                    class="w-full overflow-hidden flex items-center gap-2 text-left border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/70"
                                     title={displayPath(row.node.path)}
                                 >
                                     <button
-                                        class="w-full flex min-w-0 flex-1 items-center gap-2 text-left"
+                                        class="w-full flex min-w-0 flex-1 items-center gap-2 text-left py-2 {rowIndentClass(row.depth, 'dir')}"
                                         onclick={() => onFolderRowClick(row.node.path, row.depth)}
                                         oncontextmenu={(event) =>
                                             openFolderContextMenu(event, row.node.path, row.node.name)}
@@ -738,12 +737,13 @@
                                 </div>
                             {:else}
                                 <div
-                                    class="w-full overflow-hidden flex items-center gap-2 py-2 pr-3 text-left border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/70 {rowIndentClass(row.depth, 'file')}"
+                                    class="w-full overflow-hidden flex items-center gap-2 text-left border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/70"
                                     title={displayPath(row.node.path)}
                                 >
                                     <button
-                                        class="w-full flex min-w-0 flex-1 items-center gap-2 text-left"
-                                        onclick={() => onFileRowClick(row.node.path)}
+                                        class="w-full flex min-w-0 flex-1 items-center gap-2 text-left py-2 {rowIndentClass(row.depth, 'file')}"
+                                        onclick={(event) =>
+                                            openFileContextMenu(event, row.node.path, row.node.name)}
                                         oncontextmenu={(event) =>
                                             openFileContextMenu(event, row.node.path, row.node.name)}
                                     >

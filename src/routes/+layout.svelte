@@ -120,6 +120,7 @@
 	}
 
 	onMount(() => {
+		document.addEventListener('contextmenu', e => e.preventDefault());
 		let hasShownWindow = false;
 
 		const showWindowOnce = () => {
