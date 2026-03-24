@@ -102,6 +102,15 @@ pub(crate) fn prepare_filters(filters: &[Filter]) -> PreparedFilters {
         .map(normalize_path_text)
         .filter(|s| !s.is_empty());
 
+    let excluded_path_prefixes: Vec<String> = filters
+        .iter()
+        .filter(|f| f.kind == "exclude_path_prefix")
+        .filter_map(|f| f.value.as_deref())
+        .flat_map(|v| v.lines())
+        .map(normalize_path_text)
+        .filter(|s| !s.is_empty())
+        .collect();
+
     let size_gt = filters
         .iter()
         .find(|f| f.kind == "size_gt")
@@ -177,6 +186,7 @@ pub(crate) fn prepare_filters(filters: &[Filter]) -> PreparedFilters {
         name_contains,
         path_contains,
         path_prefix,
+        excluded_path_prefixes,
         size_gt,
         size_lt,
         modified_after,

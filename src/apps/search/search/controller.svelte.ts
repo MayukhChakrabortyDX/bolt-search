@@ -5,6 +5,7 @@ import {
     type SearchRunMode,
 } from "./page-types";
 import {
+    defaultExcludedSystemFolders,
     dedupePaths,
     displayPath,
     normalizeExtension,
@@ -145,8 +146,49 @@ export function createSearchController() {
         );
     }
 
+    function applyDefaultExcludedFoldersIfEmpty() {
+        if (state.searchForm.excludedFolders.length > 0) return;
+        state.searchForm.excludedFolders = defaultExcludedSystemFolders(
+            state.availableRoots,
+        );
+    }
+
+    function removeExcludedFolder(pathToRemove: string) {
+        state.searchForm.excludedFolders = state.searchForm.excludedFolders.filter(
+            (path) => path !== pathToRemove,
+        );
+    }
+
+    async function pickExcludedFolders() {
+        const selectedFolders = state.searchForm.excludedFolders;
+        const defaultPath = selectedFolders[0] || state.availableRoots[0];
+
+        try {
+            const selected = await open({
+                directory: true,
+                multiple: true,
+                ...(defaultPath ? { defaultPath } : {}),
+            });
+
+            if (Array.isArray(selected)) {
+                state.searchForm.excludedFolders = dedupePaths([
+                    ...selectedFolders,
+                    ...selected,
+                ]);
+            } else if (typeof selected === "string") {
+                state.searchForm.excludedFolders = dedupePaths([
+                    ...selectedFolders,
+                    selected,
+                ]);
+            }
+        } catch (error) {
+            console.error("Exclude folder selection failed:", error);
+        }
+    }
+
     function resetSearchForm() {
         state.searchForm = createDefaultSearchForm();
+        applyDefaultExcludedFoldersIfEmpty();
         state.enforceFolderScopeValidation = false;
     }
 
@@ -214,6 +256,7 @@ export function createSearchController() {
             runtime,
             saveFilter,
             loadFilter,
+            applyDefaultExcludedFoldersIfEmpty,
         });
 
         return () => {
@@ -232,8 +275,11 @@ export function createSearchController() {
         togglePopularExtension,
         removeExtensionToken,
         removeScopeFolder,
+        removeExcludedFolder,
         resetSearchForm,
         pickScopeFolders,
+        pickExcludedFolders,
+        applyDefaultExcludedFoldersIfEmpty,
         isFolderScanning: (path: string) =>
             isFolderScanning(state, path) || !!state.intentLoadingFolders[path],
         toggleDirectory: async (path: string, depth: number) => {

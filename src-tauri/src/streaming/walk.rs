@@ -10,6 +10,7 @@ use rayon::prelude::*;
 use tauri::ipc::Channel;
 
 use crate::search::{
+    can_descend_into_dir,
     entry_matches_with_metadata,
     entry_matches_without_metadata,
     get_thread_pool,
@@ -77,6 +78,10 @@ pub(super) fn run_walkdir_search(
     for root in roots {
         let root_path = PathBuf::from(root.trim());
         if !root_path.exists() || !root_path.is_dir() {
+            continue;
+        }
+
+        if !can_descend_into_dir(&root_path, filters.as_ref()) {
             continue;
         }
 
@@ -310,7 +315,7 @@ fn scan_folder_chunk(
             let path = dir_entry.path();
             let is_dir = file_type.is_dir();
 
-            if is_dir {
+            if is_dir && can_descend_into_dir(&path, filters) {
                 discovered_subfolders.push(path.to_string_lossy().to_string());
             }
 

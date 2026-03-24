@@ -80,6 +80,11 @@ export function formToFilters(form: SearchFormState): Filter[] {
         push("subfolder", dedupePaths(form.scopeFolders).join("\n"));
     }
 
+    const excludedFolders = dedupePaths(form.excludedFolders);
+    if (excludedFolders.length > 0) {
+        push("exclude_path_prefix", excludedFolders.join("\n"));
+    }
+
     if (form.kind === "file") {
         push("file_only");
     } else if (form.kind === "folder") {
@@ -162,6 +167,12 @@ export function formFromFilters(filters: Filter[]): SearchFormState {
         next.scopeMode = "folder";
         next.scopeFolders = folderPaths;
     }
+
+    next.excludedFolders = dedupePaths(
+        getMany("exclude_path_prefix").flatMap((filter) =>
+            parseSubfolderPaths(filter.value),
+        ),
+    );
 
     if (getMany("file_only").length > 0) {
         next.kind = "file";

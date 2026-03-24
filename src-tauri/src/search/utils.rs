@@ -57,11 +57,19 @@ pub(crate) fn path_starts_with_component(path: &str, prefix: &str) -> bool {
 }
 
 pub(crate) fn can_descend_into_dir(path: &Path, filters: &PreparedFilters) -> bool {
+    let dir_path = normalize_path_for_match(path);
+
+    if filters
+        .excluded_path_prefixes
+        .iter()
+        .any(|excluded| path_starts_with_component(&dir_path, excluded))
+    {
+        return false;
+    }
+
     let Some(prefix) = filters.path_prefix.as_deref() else {
         return true;
     };
-
-    let dir_path = normalize_path_for_match(path);
 
     path_starts_with_component(&dir_path, prefix)
         || path_starts_with_component(prefix, &dir_path)
@@ -116,4 +124,51 @@ pub(crate) fn roots_from_drive_filters(filters: &[Filter]) -> Vec<PathBuf> {
         .map(PathBuf::from)
         .filter(|p| p.exists())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+    use std::path::Path;
+
+    use crate::search::types::PreparedFilters;
+
+    use super::{can_descend_into_dir, normalize_path_text};
+
+    fn prepared_with_excluded(excluded: &[&str]) -> PreparedFilters {
+        PreparedFilters {
+            extensions: HashSet::new(),
+            name_contains: Vec::new(),
+            path_contains: Vec::new(),
+            path_prefix: None,
+            excluded_path_prefixes: excluded
+                .iter()
+                .map(|value| normalize_path_text(value))
+                .collect(),
+            size_gt: None,
+            size_lt: None,
+            modified_after: None,
+            modified_before: None,
+            created_after: None,
+            created_before: None,
+            file_only: false,
+            folder_only: false,
+            hidden: false,
+            readonly: false,
+            stage_order: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn excluded_child_does_not_block_root_descent() {
+        let filters = prepared_with_excluded(&["C:/Windows"]);
+        assert!(can_descend_into_dir(Path::new("C:/"), &filters));
+    }
+
+    #[test]
+    fn excluded_path_blocks_descend_inside_prefix() {
+        let filters = prepared_with_excluded(&["C:/Windows"]);
+        assert!(!can_descend_into_dir(Path::new("C:/Windows"), &filters));
+        assert!(!can_descend_into_dir(Path::new("C:/Windows/System32"), &filters));
+    }
 }

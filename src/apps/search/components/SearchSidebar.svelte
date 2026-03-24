@@ -27,6 +27,8 @@
         onEnsureDriveScopeSelection,
         onPickScopeFolders,
         onRemoveScopeFolder,
+        onPickExcludedFolders,
+        onRemoveExcludedFolder,
         onTogglePopularExtension,
         onNormalizeExtensionInput,
         onRemoveExtensionToken,
@@ -51,6 +53,8 @@
         onEnsureDriveScopeSelection: () => void;
         onPickScopeFolders: () => Promise<void>;
         onRemoveScopeFolder: (path: string) => void;
+        onPickExcludedFolders: () => Promise<void>;
+        onRemoveExcludedFolder: (path: string) => void;
         onTogglePopularExtension: (value: string) => void;
         onNormalizeExtensionInput: () => void;
         onRemoveExtensionToken: (value: string) => void;
@@ -197,6 +201,9 @@
             onTogglePopularExtension={onTogglePopularExtension}
             onNormalizeExtensionInput={onNormalizeExtensionInput}
             onRemoveExtensionToken={onRemoveExtensionToken}
+            onPickExcludedFolders={onPickExcludedFolders}
+            onRemoveExcludedFolder={onRemoveExcludedFolder}
+            {displayPath}
         />
     </div>
 

@@ -108,6 +108,7 @@ export type SearchFormState = {
     scopeMode: SearchScopeMode;
     scopeDrive: string;
     scopeFolders: string[];
+    excludedFolders: string[];
     kind: SearchKind;
     includeHidden: boolean;
     readonlyOnly: boolean;
@@ -157,6 +158,7 @@ export function createDefaultSearchForm(): SearchFormState {
         scopeMode: "all",
         scopeDrive: "ALL",
         scopeFolders: [],
+        excludedFolders: [],
         kind: "file",
         includeHidden: false,
         readonlyOnly: false,

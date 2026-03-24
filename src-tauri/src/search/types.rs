@@ -58,6 +58,7 @@ pub(crate) struct PreparedFilters {
     pub(crate) name_contains: Vec<String>,
     pub(crate) path_contains: Vec<String>,
     pub(crate) path_prefix: Option<String>,
+    pub(crate) excluded_path_prefixes: Vec<String>,
     pub(crate) size_gt: Option<u64>,
     pub(crate) size_lt: Option<u64>,
     pub(crate) modified_after: Option<i64>,

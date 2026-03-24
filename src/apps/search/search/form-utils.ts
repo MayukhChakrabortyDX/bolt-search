@@ -45,6 +45,48 @@ export function dedupePaths(paths: string[]): string[] {
     return unique;
 }
 
+function joinWindowsPath(root: string, child: string): string {
+    const base = root.trim().replace(/[\\/]+$/g, "");
+    return `${base}\\${child}`;
+}
+
+export function defaultExcludedSystemFolders(roots: string[]): string[] {
+    const normalizedRoots = dedupePaths(
+        roots
+            .map((root) => root.trim())
+            .filter((root) => root.length > 0),
+    );
+
+    if (normalizedRoots.length === 0) {
+        return [];
+    }
+
+    const perDriveFolders = ["$Recycle.Bin", "System Volume Information"];
+    const preferredDrive = resolvePreferredDrive(normalizedRoots);
+    const preferredDriveFolders = [
+        "Windows",
+        "Program Files",
+        "Program Files (x86)",
+        "ProgramData",
+        "Recovery",
+        "PerfLogs",
+    ];
+
+    const excluded: string[] = [];
+
+    for (const root of normalizedRoots) {
+        for (const child of perDriveFolders) {
+            excluded.push(joinWindowsPath(root, child));
+        }
+    }
+
+    for (const child of preferredDriveFolders) {
+        excluded.push(joinWindowsPath(preferredDrive, child));
+    }
+
+    return dedupePaths(excluded);
+}
+
 export function normalizePath(path: string): string {
     return path.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/\/$/, "");
 }

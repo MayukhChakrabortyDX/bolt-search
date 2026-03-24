@@ -40,7 +40,7 @@ fn scan_folder_once(folder: &Path, filters: &super::types::PreparedFilters) -> F
         let path = dir_entry.path();
         let is_dir = file_type.is_dir();
 
-        if is_dir {
+        if is_dir && can_descend_into_dir(&path, filters) {
             next_folders.push(path.to_string_lossy().to_string());
         }
 
@@ -76,6 +76,7 @@ pub(crate) fn search_folder_batch_impl(
         .into_iter()
         .map(PathBuf::from)
         .filter(|p| p.exists() && p.is_dir())
+        .filter(|p| can_descend_into_dir(p, filters.as_ref()))
         .collect();
 
     if cleaned_folders.is_empty() {

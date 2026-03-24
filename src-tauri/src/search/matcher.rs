@@ -147,6 +147,17 @@ pub(crate) fn entry_matches_without_metadata(
     is_dir: bool,
     filters: &PreparedFilters,
 ) -> bool {
+    if !filters.excluded_path_prefixes.is_empty() {
+        let path_normalized = normalize_path_for_match(path);
+        if filters
+            .excluded_path_prefixes
+            .iter()
+            .any(|excluded| path_starts_with_component(&path_normalized, excluded))
+        {
+            return false;
+        }
+    }
+
     if filters.file_only && is_dir {
         return false;
     }

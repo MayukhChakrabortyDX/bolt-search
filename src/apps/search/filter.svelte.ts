@@ -4,6 +4,7 @@ export type FilterType =
     | "path_contains"
     | "path_prefix"
     | "subfolder"
+    | "exclude_path_prefix"
     | "size_gt"
     | "size_lt"
     | "modified_after"
@@ -58,6 +59,7 @@ export class FilterModel {
         path_contains:   { label: "Path contains",     placeholder: "src/",       hasValue: true },
         path_prefix:     { label: "Path prefix",       placeholder: "C:/Users/me/Projects", hasValue: true },
         subfolder:       { label: "Subfolder",                                     hasValue: true },
+        exclude_path_prefix: { label: "Exclude folders",                          hasValue: true },
         size_gt:         { label: "Size greater than",                             hasValue: true, isSize: true },
         size_lt:         { label: "Size less than",                                hasValue: true, isSize: true },
         modified_after:  { label: "Modified after",                                hasValue: true },
@@ -80,6 +82,7 @@ export class FilterModel {
         "path_contains",
         "path_prefix",
         "subfolder",
+        "exclude_path_prefix",
         "size_gt",
         "size_lt",
         "modified_after",

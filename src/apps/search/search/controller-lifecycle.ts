@@ -13,6 +13,7 @@ type LifecycleDeps = {
     runtime: SearchRuntimeDeps;
     saveFilter: () => Promise<void>;
     loadFilter: () => Promise<void>;
+    applyDefaultExcludedFoldersIfEmpty: () => void;
 };
 
 export function attachControllerLifecycle({
@@ -20,6 +21,7 @@ export function attachControllerLifecycle({
     runtime,
     saveFilter,
     loadFilter,
+    applyDefaultExcludedFoldersIfEmpty,
 }: LifecycleDeps): () => void {
     const onSave = () => {
         void saveFilter();
@@ -120,6 +122,7 @@ export function attachControllerLifecycle({
                     );
                 }
             }
+            applyDefaultExcludedFoldersIfEmpty();
         } catch {
             state.availableRoots = [];
         } finally {

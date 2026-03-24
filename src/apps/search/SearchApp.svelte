@@ -183,6 +183,8 @@
         onEnsureDriveScopeSelection={controller.ensureDriveScopeSelection}
         onPickScopeFolders={controller.pickScopeFolders}
         onRemoveScopeFolder={controller.removeScopeFolder}
+        onPickExcludedFolders={controller.pickExcludedFolders}
+        onRemoveExcludedFolder={controller.removeExcludedFolder}
         onTogglePopularExtension={controller.togglePopularExtension}
         onNormalizeExtensionInput={controller.normalizeExtensionInput}
         onRemoveExtensionToken={controller.removeExtensionToken}
