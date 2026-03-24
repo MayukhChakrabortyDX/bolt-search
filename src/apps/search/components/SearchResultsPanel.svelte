@@ -639,7 +639,8 @@
                                         {#if entry.is_dir}
                                             <button
                                                 class="w-full overflow-hidden flex items-center gap-2 py-2 px-3 text-left border-t border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/70"
-                                                onclick={() => onFileRowClick(entry.path)}
+                                                onclick={(event) =>
+                                                    openFolderContextMenu(event, entry.path, entry.name)}
                                                 oncontextmenu={(event) =>
                                                     openFolderContextMenu(event, entry.path, entry.name)}
                                                 title={displayPath(entry.path)}
@@ -659,7 +660,8 @@
                                         {:else}
                                             <button
                                                 class="w-full overflow-hidden flex items-center gap-2 py-2 px-3 text-left border-t border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/70"
-                                                onclick={() => onFileRowClick(entry.path)}
+                                                onclick={(event) =>
+                                                    openFileContextMenu(event, entry.path, entry.name)}
                                                 oncontextmenu={(event) =>
                                                     openFileContextMenu(event, entry.path, entry.name)}
                                                 title={displayPath(entry.path)}
